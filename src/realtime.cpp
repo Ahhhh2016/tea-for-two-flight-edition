@@ -981,6 +981,69 @@ void Realtime::timerEvent(QTimerEvent *event) {
         m_camera.setPosition(m_camera.getPosition() + displacement);
     }
 
+	// Portal traversal via keyboard:
+	// - When in IQ with portal enabled: while holding W and the cursor is inside the portal rect, "advance" through the portal.
+	// - When in Water: while holding S and cursor inside the same rect, "walk back" to IQ.
+	// We use a virtual distance (m_portalDepth) and a small cooldown to avoid flicker.
+	{
+		// countdown cooldown
+		if (m_portalCooldownTimer > 0.f) {
+			m_portalCooldownTimer = std::max(0.f, m_portalCooldownTimer - deltaTime);
+		}
+		const bool cooldownReady = (m_portalCooldownTimer <= 0.f);
+
+		// Compute pointer position in NDC to check inside portal quad
+		int fbw = size().width() * m_devicePixelRatio;
+		int fbh = size().height() * m_devicePixelRatio;
+		bool insidePortalRect = false;
+		if (fbw > 0 && fbh > 0) {
+			float ndcX = (m_prev_mouse_pos.x / float(fbw / m_devicePixelRatio)) * 2.f - 1.f;
+			float ndcY = 1.f - (m_prev_mouse_pos.y / float(fbh / m_devicePixelRatio)) * 2.f;
+			// Portal quad is centered at (0,0) with extents from createPortalQuad(): w=0.6, h=0.8
+			// So half-width = 0.3, half-height = 0.4
+			insidePortalRect = (std::abs(ndcX) <= 0.3f) && (std::abs(ndcY) <= 0.4f);
+		}
+
+		const bool portalRenderable =
+			settings.sceneFilePath.empty() &&
+			(m_portalEnabled) &&
+			(m_portalFBO != 0) && (m_portalColorTex != 0) && (m_portalProg != 0) && (m_portalVAO != 0);
+
+		// Walk "into" portal from IQ
+		if (portalRenderable &&
+			settings.fullscreenScene == FullscreenScene::IQ) {
+			if (insidePortalRect && m_keyMap[Qt::Key_W] && cooldownReady) {
+				m_portalDepth -= moveSpeed * deltaTime;
+				if (m_portalDepth <= 0.f) {
+					settings.fullscreenScene = FullscreenScene::Water;
+					m_portalDepth = m_portalDepthMax;
+					m_portalCooldownTimer = m_portalCooldownSec;
+					update();
+					return;
+				}
+			} else {
+				// recover when not actively pushing through
+				m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + moveSpeed * 0.75f * deltaTime);
+			}
+		}
+		// Walk "back" from Water to IQ (use same rect and S key)
+		else if (settings.sceneFilePath.empty() &&
+				 settings.fullscreenScene == FullscreenScene::Water) {
+			if (insidePortalRect && m_keyMap[Qt::Key_S] && cooldownReady) {
+				m_portalDepth -= moveSpeed * deltaTime;
+				if (m_portalDepth <= 0.f) {
+					settings.fullscreenScene = FullscreenScene::IQ;
+					m_portalDepth = m_portalDepthMax;
+					m_portalCooldownTimer = m_portalCooldownSec;
+					update();
+					return;
+				}
+			} else {
+				m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + moveSpeed * 0.75f * deltaTime);
+			}
+		}
+	}
+
     // If EC2 is enabled, rebuild geometry when the camera has moved far enough to change LOD
     if (settings.extraCredit2 && !settings.sceneFilePath.empty() && !m_render.shapes.empty()) {
         if (!m_hasLastLodCamPos) {

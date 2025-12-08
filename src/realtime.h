@@ -115,6 +115,12 @@ private:
     GLuint m_portalVAO = 0;
     GLuint m_portalVBO = 0;
 
+    // Portal traversal state
+    float m_portalDepthMax = 1.0f;    // virtual distance to traverse through portal
+    float m_portalDepth    = 1.0f;    // current remaining distance
+    float m_portalCooldownSec   = 0.4f; // time window to prevent rapid toggles
+    float m_portalCooldownTimer = 0.0f; // countdown
+
     // Cached framebuffer size for textures
     int m_fbWidth = 0;
     int m_fbHeight = 0;
