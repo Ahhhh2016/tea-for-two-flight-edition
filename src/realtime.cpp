@@ -261,6 +261,21 @@ void Realtime::paintGL() {
                 float clickY = m_mouseDown ? mouseY : 0.f;
                 glUniform4f(locMouseB, mouseX, mouseY, clickX, clickY);
             }
+ 			// Camera uniforms for Water shader (to mirror rainforest controls)
+ 			GLint locCamPosB  = glGetUniformLocation(m_postProgWater, "u_camPos");
+ 			GLint locCamLookB = glGetUniformLocation(m_postProgWater, "u_camLook");
+ 			GLint locCamUpB   = glGetUniformLocation(m_postProgWater, "u_camUp");
+ 			GLint locFovYB    = glGetUniformLocation(m_postProgWater, "u_camFovY");
+ 			if (locCamPosB >= 0 || locCamLookB >= 0 || locCamUpB >= 0 || locFovYB >= 0) {
+ 				glm::vec3 camPos  = m_camera.getPosition();
+ 				glm::vec3 camLook = m_camera.getLook();
+ 				glm::vec3 camUp   = m_camera.getUp();
+ 				float fovY        = m_camera.getFovYRadians();
+ 				if (locCamPosB  >= 0) glUniform3f(locCamPosB,  camPos.x,  camPos.y,  camPos.z);
+ 				if (locCamLookB >= 0) glUniform3f(locCamLookB, camLook.x, camLook.y, camLook.z);
+ 				if (locCamUpB   >= 0) glUniform3f(locCamUpB,   camUp.x,   camUp.y,   camUp.z);
+ 				if (locFovYB    >= 0) glUniform1f(locFovYB,    fovY);
+ 			}
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
             // 2) Render Scene A (IQ rainforest) to screen

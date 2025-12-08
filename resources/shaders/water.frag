@@ -12,6 +12,11 @@ in vec2 v_uv; // from post.vert (unused; we use gl_FragCoord)
 uniform vec3  iResolution; // (width, height, 1)
 uniform float iTime;
 uniform vec4  iMouse;      // Shadertoy-style: xy = current pixel coords, zw = click pos
+// Camera uniforms to mirror rainforest interactions
+uniform vec3  u_camPos;
+uniform vec3  u_camLook;
+uniform vec3  u_camUp;
+uniform float u_camFovY;
 
 #ifdef GL_ES
 precision highp float;
@@ -134,6 +139,21 @@ vec3 getRay(vec2 fragCoord) {
     * proj;
 }
 
+// Camera-based ray generator (matches app camera like rainforest)
+vec3 getRayFromCamera(vec2 fragCoord) {
+  vec2 ndc = ((fragCoord.xy / iResolution.xy) * 2.0 - 1.0);
+  float aspect = iResolution.x / max(1.0, iResolution.y);
+  ndc.x *= aspect;
+  float tanHalfFov = tan(max(0.001, u_camFovY * 0.5));
+  // Make the basis robust if up ~ look
+  vec3 worldUp = vec3(0.0, 1.0, 0.0);
+  vec3 safeUp = normalize(abs(dot(u_camUp, u_camLook)) > 0.99 ? worldUp : u_camUp);
+  vec3 right = normalize(cross(u_camLook, safeUp));
+  vec3 up    = normalize(cross(right, u_camLook));
+  vec3 dir   = normalize(u_camLook + right * (ndc.x * tanHalfFov) + up * (ndc.y * tanHalfFov));
+  return dir;
+}
+
 // Ray-Plane intersection checker
 float intersectPlane(vec3 origin, vec3 direction, vec3 point, vec3 normal) { 
   return clamp(dot(point - origin, normal) / dot(direction, normal), -1.0, 9991999.0); 
@@ -189,8 +209,8 @@ vec3 aces_tonemap(vec3 color) {
 
 // Main
 void mainImage(out vec4 fragColor_, in vec2 fragCoord) {
-  // get the ray
-  vec3 ray = getRay(fragCoord);
+  // Use app camera (rainforest-style controls)
+  vec3 ray = getRayFromCamera(fragCoord);
   if(ray.y >= 0.0) {
     // if ray.y is positive, render the sky
     vec3 C = getAtmosphere(ray) + getSun(ray);
@@ -204,7 +224,7 @@ void mainImage(out vec4 fragColor_, in vec2 fragCoord) {
   vec3 waterPlaneLow = vec3(0.0, -WATER_DEPTH, 0.0);
 
   // define ray origin, moving around
-  vec3 origin = vec3(iTime * 0.2, CAMERA_HEIGHT, 1);
+  vec3 origin = u_camPos;
 
   // calculate intersections and reconstruct positions
   float highPlaneHit = intersectPlane(origin, ray, waterPlaneHigh, vec3(0.0, 1.0, 0.0));
