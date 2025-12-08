@@ -163,6 +163,8 @@ void Realtime::initializeGL() {
     createScreenQuad();
     createPortalQuad();
     createOrResizePortalFBO(fbw, fbh);
+	// Place portal in world: at y=1.2, z=0 facing +Z (camera starts at z=5 looking -Z)
+	m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, 1.2f, 0.f));
 
     // Initialize previous camera matrices
     m_prevV = m_camera.getViewMatrix();
@@ -298,8 +300,14 @@ void Realtime::paintGL() {
             glUseProgram(m_portalProg);
             GLint locSamp = glGetUniformLocation(m_portalProg, "u_portalTex");
             GLint locAlpha = glGetUniformLocation(m_portalProg, "u_alpha");
+			GLint locM = glGetUniformLocation(m_portalProg, "u_M");
+			GLint locV = glGetUniformLocation(m_portalProg, "u_V");
+			GLint locP = glGetUniformLocation(m_portalProg, "u_P");
             if (locSamp >= 0) glUniform1i(locSamp, 0);
             if (locAlpha >= 0) glUniform1f(locAlpha, 1.0f);
+			if (locM >= 0) glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(m_portalModel));
+			if (locV >= 0) glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(m_camera.getViewMatrix()));
+			if (locP >= 0) glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(m_camera.getProjectionMatrix()));
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
             glBindVertexArray(m_portalVAO);
@@ -992,16 +1000,30 @@ void Realtime::timerEvent(QTimerEvent *event) {
 		}
 		const bool cooldownReady = (m_portalCooldownTimer <= 0.f);
 
-		// Compute pointer position in NDC to check inside portal quad
-		int fbw = size().width() * m_devicePixelRatio;
-		int fbh = size().height() * m_devicePixelRatio;
+		// Ray-portal intersection test in world space using camera forward ray
 		bool insidePortalRect = false;
-		if (fbw > 0 && fbh > 0) {
-			float ndcX = (m_prev_mouse_pos.x / float(fbw / m_devicePixelRatio)) * 2.f - 1.f;
-			float ndcY = 1.f - (m_prev_mouse_pos.y / float(fbh / m_devicePixelRatio)) * 2.f;
-			// Portal quad is centered at (0,0) with extents from createPortalQuad(): w=0.6, h=0.8
-			// So half-width = 0.3, half-height = 0.4
-			insidePortalRect = (std::abs(ndcX) <= 0.3f) && (std::abs(ndcY) <= 0.4f);
+		{
+			const glm::vec3 camPos = m_camera.getPosition();
+			const glm::vec3 rayDir = glm::normalize(m_camera.getLook());
+			const glm::vec3 center = glm::vec3(m_portalModel * glm::vec4(0.f, 0.f, 0.f, 1.f));
+			const glm::vec3 axisX  = glm::vec3(m_portalModel * glm::vec4(1.f, 0.f, 0.f, 0.f));
+			const glm::vec3 axisY  = glm::vec3(m_portalModel * glm::vec4(0.f, 1.f, 0.f, 0.f));
+			const glm::vec3 nrm    = glm::normalize(glm::cross(axisX, axisY));
+			const float denom = glm::dot(rayDir, nrm);
+			if (std::abs(denom) > 1e-4f) {
+				const float t = glm::dot(center - camPos, nrm) / denom;
+				if (t > 0.f) {
+					const glm::vec3 hit = camPos + t * rayDir;
+					const glm::vec3 v = hit - center;
+					const float halfW = 0.5f * glm::length(axisX);
+					const float halfH = 0.5f * glm::length(axisY);
+					const glm::vec3 uDir = glm::normalize(axisX);
+					const glm::vec3 vDir = glm::normalize(axisY);
+					const float u = glm::dot(v, uDir);
+					const float w = glm::dot(v, vDir);
+					insidePortalRect = (std::abs(u) <= halfW) && (std::abs(w) <= halfH);
+				}
+			}
 		}
 
 		const bool portalRenderable =
@@ -1254,28 +1276,28 @@ void Realtime::releasePortalFBO() {
 
 void Realtime::createPortalQuad() {
     if (m_portalVAO) return;
-    const float w = 0.6f;
-    const float h = 0.8f;
-    const float x0 = -w * 0.5f, x1 =  w * 0.5f;
-    const float y0 = -h * 0.5f, y1 =  h * 0.5f;
-    float verts[] = {
-        // pos          // uv
-        x0, y0,         0.f, 0.f,
-        x1, y0,         1.f, 0.f,
-        x1, y1,         1.f, 1.f,
-        x0, y0,         0.f, 0.f,
-        x1, y1,         1.f, 1.f,
-        x0, y1,         0.f, 1.f
-    };
+	const float s = 1.0f; // size = 1.0 (half-size = 0.5)
+	m_portalHalfSize = 0.5f;
+	const float x0 = -m_portalHalfSize, x1 =  m_portalHalfSize;
+	const float y0 = -m_portalHalfSize, y1 =  m_portalHalfSize;
+	float verts[] = {
+		// pos (xyz)           // uv
+		x0, y0, 0.f,           0.f, 0.f,
+		x1, y0, 0.f,           1.f, 0.f,
+		x1, y1, 0.f,           1.f, 1.f,
+		x0, y0, 0.f,           0.f, 0.f,
+		x1, y1, 0.f,           1.f, 1.f,
+		x0, y1, 0.f,           0.f, 1.f
+	};
     glGenVertexArrays(1, &m_portalVAO);
     glGenBuffers(1, &m_portalVBO);
     glBindVertexArray(m_portalVAO);
     glBindBuffer(GL_ARRAY_BUFFER, m_portalVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+	glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+	glEnableVertexAttribArray(0);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(1);
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
