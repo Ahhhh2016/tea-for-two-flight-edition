@@ -31,7 +31,7 @@ Realtime::Realtime(QWidget *parent)
     m_keyMap[Qt::Key_A]       = false;
     m_keyMap[Qt::Key_S]       = false;
     m_keyMap[Qt::Key_D]       = false;
-    m_keyMap[Qt::Key_Control] = false;
+    m_keyMap[Qt::Key_Alt]     = false;
     m_keyMap[Qt::Key_Space]   = false;
 
     // If you must use this function, do not edit anything above this
@@ -65,6 +65,12 @@ void Realtime::finish() {
 		glDeleteProgram(m_postProgWater);
 		m_postProgWater = 0;
 	}
+    if (m_portalProg) {
+        glDeleteProgram(m_portalProg);
+        m_portalProg = 0;
+    }
+    releasePortalQuad();
+    releasePortalFBO();
 
     if (m_vbo) {
         glDeleteBuffers(1, &m_vbo);
@@ -123,6 +129,9 @@ void Realtime::initializeGL() {
 		// Water fullscreen shader
 		m_postProgWater = ShaderLoader::createShaderProgram(":/resources/shaders/post.vert",
 															":/resources/shaders/water.frag");
+        // Portal compositing shader
+        m_portalProg = ShaderLoader::createShaderProgram(":/resources/shaders/portal.vert",
+                                                         ":/resources/shaders/portal.frag");
     } catch (const std::exception &e) {
         std::cerr << "Shader error: " << e.what() << std::endl;
         if (m_prog == 0) m_prog = 0;
@@ -131,6 +140,7 @@ void Realtime::initializeGL() {
         if (m_postProgDepth == 0) m_postProgDepth = 0;
 		if (m_postProgIQ == 0) m_postProgIQ = 0;
 		if (m_postProgWater == 0) m_postProgWater = 0;
+        if (m_portalProg == 0) m_portalProg = 0;
     }
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
@@ -151,6 +161,8 @@ void Realtime::initializeGL() {
     int fbh = size().height() * m_devicePixelRatio;
     createOrResizeSceneFBO(fbw, fbh);
     createScreenQuad();
+    createPortalQuad();
+    createOrResizePortalFBO(fbw, fbh);
 
     // Initialize previous camera matrices
     m_prevV = m_camera.getViewMatrix();
@@ -165,62 +177,136 @@ void Realtime::paintGL() {
 	// Students: anything requiring OpenGL calls every frame should be done here
 	// Fullscreen shader mode (used when no scene file is loaded)
 	if (settings.sceneFilePath.empty()) {
-		GLuint prog = 0;
-		if (settings.fullscreenScene == FullscreenScene::IQ) {
-			prog = m_postProgIQ;
-		} else if (settings.fullscreenScene == FullscreenScene::Water) {
-			prog = m_postProgWater;
-		}
-		if (prog != 0) {
-			// Draw directly to the default framebuffer (or the currently bound FBO)
-			GLint prevFBO = 0;
-			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
-			int outW = size().width() * m_devicePixelRatio;
-			int outH = size().height() * m_devicePixelRatio;
-			if (prevFBO == 0) {
-				glViewport(0, 0, outW, outH);
-			}
-			glDisable(GL_DEPTH_TEST);
-			glUseProgram(prog);
-			glBindVertexArray(m_screenVAO);
-			// Common uniforms
-			GLint locRes  = glGetUniformLocation(prog, "iResolution");
-			GLint locTime = glGetUniformLocation(prog, "iTime");
-			if (locRes  >= 0) glUniform3f(locRes,  float(outW), float(outH), 1.0f);
-			if (locTime >= 0) glUniform1f(locTime, m_timeSec);
-			// iFrame (IQ only)
-			GLint locFrame = glGetUniformLocation(prog, "iFrame");
-			if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
-			// iMouse (water uses; safe if unused)
-			GLint locMouse = glGetUniformLocation(prog, "iMouse");
-			if (locMouse >= 0) {
-				// Convert Qt coords (origin top-left) to Shadertoy-style (origin bottom-left)
-				float mouseX = m_prev_mouse_pos.x * float(m_devicePixelRatio);
-				float mouseY = (size().height() - m_prev_mouse_pos.y) * float(m_devicePixelRatio);
-				float clickX = m_mouseDown ? mouseX : 0.f;
-				float clickY = m_mouseDown ? mouseY : 0.f;
-				glUniform4f(locMouse, mouseX, mouseY, clickX, clickY);
-			}
-			// Camera uniforms for IQ shader (safe if missing)
-			GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
-			GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
-			GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
-			GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
-			if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0) {
-				glm::vec3 camPos  = m_camera.getPosition();
-				glm::vec3 camLook = m_camera.getLook();
-				glm::vec3 camUp   = m_camera.getUp();
-				float fovY        = m_camera.getFovYRadians();
-				if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
-				if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
-				if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
-				if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
-			}
-			glDrawArrays(GL_TRIANGLES, 0, 6);
-			// Advance frame index once per paint
-			m_frameCount++;
-			return;
-		}
+        // Portal path: IQ as Scene A + Water as Scene B
+        bool portalActive = (settings.fullscreenScene == FullscreenScene::IQ) &&
+                            m_portalEnabled &&
+                            (m_postProgIQ != 0) && (m_postProgWater != 0) && (m_portalProg != 0) &&
+                            (m_screenVAO != 0) && (m_portalFBO != 0) && (m_portalColorTex != 0);
+
+        GLint prevFBO = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
+        int outW = size().width() * m_devicePixelRatio;
+        int outH = size().height() * m_devicePixelRatio;
+
+        if (!portalActive) {
+            GLuint prog = 0;
+            if (settings.fullscreenScene == FullscreenScene::IQ) {
+                prog = m_postProgIQ;
+            } else if (settings.fullscreenScene == FullscreenScene::Water) {
+                prog = m_postProgWater;
+            }
+            if (prog != 0) {
+                if (prevFBO == 0) {
+                    glViewport(0, 0, outW, outH);
+                }
+                glDisable(GL_DEPTH_TEST);
+                glUseProgram(prog);
+                glBindVertexArray(m_screenVAO);
+                // Common uniforms
+                GLint locRes  = glGetUniformLocation(prog, "iResolution");
+                GLint locTime = glGetUniformLocation(prog, "iTime");
+                if (locRes  >= 0) glUniform3f(locRes,  float(outW), float(outH), 1.0f);
+                if (locTime >= 0) glUniform1f(locTime, m_timeSec);
+                // iFrame (IQ only)
+                GLint locFrame = glGetUniformLocation(prog, "iFrame");
+                if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
+                // iMouse (water uses; safe if unused)
+                GLint locMouse = glGetUniformLocation(prog, "iMouse");
+                if (locMouse >= 0) {
+                    float mouseX = m_prev_mouse_pos.x * float(m_devicePixelRatio);
+                    float mouseY = (size().height() - m_prev_mouse_pos.y) * float(m_devicePixelRatio);
+                    float clickX = m_mouseDown ? mouseX : 0.f;
+                    float clickY = m_mouseDown ? mouseY : 0.f;
+                    glUniform4f(locMouse, mouseX, mouseY, clickX, clickY);
+                }
+                // Camera uniforms for IQ shader (safe if missing)
+                GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
+                GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
+                GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
+                GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
+                if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0) {
+                    glm::vec3 camPos  = m_camera.getPosition();
+                    glm::vec3 camLook = m_camera.getLook();
+                    glm::vec3 camUp   = m_camera.getUp();
+                    float fovY        = m_camera.getFovYRadians();
+                    if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
+                    if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
+                    if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
+                    if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
+                }
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+                m_frameCount++;
+                return;
+            }
+        } else {
+            // 1) Render Scene B (Water) into portal FBO
+            glBindFramebuffer(GL_FRAMEBUFFER, m_portalFBO);
+            glViewport(0, 0, m_portalWidth, m_portalHeight);
+            const float clearC[4] = {0.f, 0.f, 0.f, 1.f};
+            glClearBufferfv(GL_COLOR, 0, clearC);
+            glDisable(GL_DEPTH_TEST);
+            glUseProgram(m_postProgWater);
+            glBindVertexArray(m_screenVAO);
+            GLint locResB  = glGetUniformLocation(m_postProgWater, "iResolution");
+            GLint locTimeB = glGetUniformLocation(m_postProgWater, "iTime");
+            if (locResB  >= 0) glUniform3f(locResB,  float(m_portalWidth), float(m_portalHeight), 1.0f);
+            if (locTimeB >= 0) glUniform1f(locTimeB, m_timeSec);
+            GLint locMouseB = glGetUniformLocation(m_postProgWater, "iMouse");
+            if (locMouseB >= 0) {
+                float mouseX = m_prev_mouse_pos.x * float(m_devicePixelRatio);
+                float mouseY = (size().height() - m_prev_mouse_pos.y) * float(m_devicePixelRatio);
+                float clickX = m_mouseDown ? mouseX : 0.f;
+                float clickY = m_mouseDown ? mouseY : 0.f;
+                glUniform4f(locMouseB, mouseX, mouseY, clickX, clickY);
+            }
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            // 2) Render Scene A (IQ rainforest) to screen
+            glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+            if (prevFBO == 0) {
+                glViewport(0, 0, outW, outH);
+            }
+            glDisable(GL_DEPTH_TEST);
+            glUseProgram(m_postProgIQ);
+            glBindVertexArray(m_screenVAO);
+            GLint locResA  = glGetUniformLocation(m_postProgIQ, "iResolution");
+            GLint locTimeA = glGetUniformLocation(m_postProgIQ, "iTime");
+            GLint locFrameA = glGetUniformLocation(m_postProgIQ, "iFrame");
+            if (locResA  >= 0) glUniform3f(locResA,  float(outW), float(outH), 1.0f);
+            if (locTimeA >= 0) glUniform1f(locTimeA, m_timeSec);
+            if (locFrameA >= 0) glUniform1i(locFrameA, m_frameCount);
+            GLint locCamPosA  = glGetUniformLocation(m_postProgIQ, "u_camPos");
+            GLint locCamLookA = glGetUniformLocation(m_postProgIQ, "u_camLook");
+            GLint locCamUpA   = glGetUniformLocation(m_postProgIQ, "u_camUp");
+            GLint locFovYA    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
+            if (locCamPosA >= 0 || locCamLookA >= 0 || locCamUpA >= 0 || locFovYA >= 0) {
+                glm::vec3 camPos  = m_camera.getPosition();
+                glm::vec3 camLook = m_camera.getLook();
+                glm::vec3 camUp   = m_camera.getUp();
+                float fovY        = m_camera.getFovYRadians();
+                if (locCamPosA  >= 0) glUniform3f(locCamPosA,  camPos.x,  camPos.y,  camPos.z);
+                if (locCamLookA >= 0) glUniform3f(locCamLookA, camLook.x, camLook.y, camLook.z);
+                if (locCamUpA   >= 0) glUniform3f(locCamUpA,   camUp.x,   camUp.y,   camUp.z);
+                if (locFovYA    >= 0) glUniform1f(locFovYA,    fovY);
+            }
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            m_frameCount++;
+
+            // 3) Composite portal quad
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glUseProgram(m_portalProg);
+            GLint locSamp = glGetUniformLocation(m_portalProg, "u_portalTex");
+            GLint locAlpha = glGetUniformLocation(m_portalProg, "u_alpha");
+            if (locSamp >= 0) glUniform1i(locSamp, 0);
+            if (locAlpha >= 0) glUniform1f(locAlpha, 1.0f);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
+            glBindVertexArray(m_portalVAO);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glDisable(GL_BLEND);
+            return;
+        }
 	}
 
     if (!m_prog || m_vertexCount == 0) {
@@ -466,6 +552,7 @@ void Realtime::resizeGL(int w, int h) {
     int fbw = size().width() * m_devicePixelRatio;
     int fbh = size().height() * m_devicePixelRatio;
     createOrResizeSceneFBO(fbw, fbh);
+    createOrResizePortalFBO(fbw, fbh);
 }
 
 void Realtime::sceneChanged(bool preserveCamera) {
@@ -765,6 +852,22 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
         update();
         return;
     }
+    // Toggle portal on 'O'
+    if (event->key() == Qt::Key_O) {
+        m_portalEnabled = !m_portalEnabled;
+        update();
+        return;
+    }
+    // Toggle fullscreen scene on 'P' (swap IQ <-> Water)
+    if (event->key() == Qt::Key_P) {
+        if (settings.fullscreenScene == FullscreenScene::IQ) {
+            settings.fullscreenScene = FullscreenScene::Water;
+        } else {
+            settings.fullscreenScene = FullscreenScene::IQ;
+        }
+        update();
+        return;
+    }
     m_keyMap[Qt::Key(event->key())] = true;
 }
 
@@ -869,7 +972,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
     if (m_keyMap[Qt::Key_Space]) {
         displacement += worldUp;
     }
-    if (m_keyMap[Qt::Key_Control]) {
+    if (m_keyMap[Qt::Key_Alt]) {
         displacement -= worldUp;
     }
 
@@ -1053,4 +1156,68 @@ void Realtime::createScreenQuad() {
 void Realtime::releaseScreenQuad() {
     if (m_screenVBO) { glDeleteBuffers(1, &m_screenVBO); m_screenVBO = 0; }
     if (m_screenVAO) { glDeleteVertexArrays(1, &m_screenVAO); m_screenVAO = 0; }
+}
+
+void Realtime::createOrResizePortalFBO(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    if (m_portalFBO == 0) {
+        glGenFramebuffers(1, &m_portalFBO);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_portalFBO);
+    if (m_portalColorTex == 0) {
+        glGenTextures(1, &m_portalColorTex);
+    }
+    glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_portalColorTex, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "Portal FBO incomplete: 0x" << std::hex << status << std::dec << std::endl;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    m_portalWidth = width;
+    m_portalHeight = height;
+}
+
+void Realtime::releasePortalFBO() {
+    if (m_portalColorTex) { glDeleteTextures(1, &m_portalColorTex); m_portalColorTex = 0; }
+    if (m_portalFBO) { glDeleteFramebuffers(1, &m_portalFBO); m_portalFBO = 0; }
+    m_portalWidth = m_portalHeight = 0;
+}
+
+void Realtime::createPortalQuad() {
+    if (m_portalVAO) return;
+    const float w = 0.6f;
+    const float h = 0.8f;
+    const float x0 = -w * 0.5f, x1 =  w * 0.5f;
+    const float y0 = -h * 0.5f, y1 =  h * 0.5f;
+    float verts[] = {
+        // pos          // uv
+        x0, y0,         0.f, 0.f,
+        x1, y0,         1.f, 0.f,
+        x1, y1,         1.f, 1.f,
+        x0, y0,         0.f, 0.f,
+        x1, y1,         1.f, 1.f,
+        x0, y1,         0.f, 1.f
+    };
+    glGenVertexArrays(1, &m_portalVAO);
+    glGenBuffers(1, &m_portalVBO);
+    glBindVertexArray(m_portalVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_portalVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void Realtime::releasePortalQuad() {
+    if (m_portalVBO) { glDeleteBuffers(1, &m_portalVBO); m_portalVBO = 0; }
+    if (m_portalVAO) { glDeleteVertexArrays(1, &m_portalVAO); m_portalVAO = 0; }
 }

@@ -105,6 +105,16 @@ private:
     GLuint m_screenVAO = 0;
     GLuint m_screenVBO = 0;
 
+    // Portal rendering (Scene B -> texture, composited into Scene A)
+    bool   m_portalEnabled = true;
+    GLuint m_portalFBO = 0;
+    GLuint m_portalColorTex = 0;
+    int    m_portalWidth = 0;
+    int    m_portalHeight = 0;
+    GLuint m_portalProg = 0;    // simple textured quad shader
+    GLuint m_portalVAO = 0;
+    GLuint m_portalVBO = 0;
+
     // Cached framebuffer size for textures
     int m_fbWidth = 0;
     int m_fbHeight = 0;
@@ -125,4 +135,9 @@ private:
     void releaseSceneFBO();
     void createScreenQuad();
     void releaseScreenQuad();
+    // Portal helpers
+    void createOrResizePortalFBO(int width, int height);
+    void releasePortalFBO();
+    void createPortalQuad();
+    void releasePortalQuad();
 };
