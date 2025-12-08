@@ -165,6 +165,14 @@ void Realtime::initializeGL() {
     createOrResizePortalFBO(fbw, fbh);
 	// Place portal in world: at y=1.2, z=0 facing +Z (camera starts at z=5 looking -Z)
 	m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, 1.2f, 0.f));
+    // Lift camera slightly at start to avoid Water-in-portal artifacts when too low
+    {
+        const float moveSpeed = 10.0f;        // keep in sync with Space/W nudges
+        const float assumedDt = 1.0f / 60.0f; // one "frame" worth
+        glm::vec3 p = m_camera.getPosition();
+        p += glm::vec3(0.f, moveSpeed * assumedDt, 0.f);
+        m_camera.setPosition(p);
+    }
 
     // Initialize previous camera matrices
     m_prevV = m_camera.getViewMatrix();
@@ -885,6 +893,7 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
     if (event->key() == Qt::Key_P) {
         if (settings.fullscreenScene == FullscreenScene::IQ) {
             settings.fullscreenScene = FullscreenScene::Water;
+            glm::vec3 p = m_camera.getPosition();
         } else {
             settings.fullscreenScene = FullscreenScene::IQ;
         }
@@ -1053,6 +1062,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 				m_portalDepth -= moveSpeed * deltaTime;
 				if (m_portalDepth <= 0.f) {
 					settings.fullscreenScene = FullscreenScene::Water;
+                    glm::vec3 p = m_camera.getPosition();
 					m_portalDepth = m_portalDepthMax;
 					m_portalCooldownTimer = m_portalCooldownSec;
 					update();
