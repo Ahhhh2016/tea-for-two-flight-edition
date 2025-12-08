@@ -632,7 +632,7 @@ float treesMap( in vec3 p, in float rt, out float oHei, out float oMat, out floa
         float s = fbm_4( p*3.0 );
         s = s*s;
         float att = 1.0-smoothstep(100.0,1200.0,rt);
-        d += 4.0*s*att;
+        d += 0.9*s*att;
         oDis = s*att;
     }
 
@@ -782,7 +782,7 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
             {
                 vec3  pos = ro + tf*rd;
                 float dis = treesMap( pos, tf, hei, mid, displa);
-                if( dis<(0.000125*tf) ) break;
+                if( dis<(0.001*tf) ) break;
                 tf += dis;
                 if( tf>tfMax ) break;
             }
