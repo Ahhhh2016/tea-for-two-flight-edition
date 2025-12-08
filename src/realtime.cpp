@@ -61,6 +61,10 @@ void Realtime::finish() {
         glDeleteProgram(m_postProgIQ);
         m_postProgIQ = 0;
     }
+	if (m_postProgWater) {
+		glDeleteProgram(m_postProgWater);
+		m_postProgWater = 0;
+	}
 
     if (m_vbo) {
         glDeleteBuffers(1, &m_vbo);
@@ -116,13 +120,17 @@ void Realtime::initializeGL() {
         // Rainforest fullscreen shader (IQ)
         m_postProgIQ = ShaderLoader::createShaderProgram(":/resources/shaders/post.vert",
                                                          ":/resources/shaders/iq_rainforest.frag");
+		// Water fullscreen shader
+		m_postProgWater = ShaderLoader::createShaderProgram(":/resources/shaders/post.vert",
+															":/resources/shaders/water.frag");
     } catch (const std::exception &e) {
         std::cerr << "Shader error: " << e.what() << std::endl;
         if (m_prog == 0) m_prog = 0;
         if (m_postProg == 0) m_postProg = 0;
         if (m_postProgMotion == 0) m_postProgMotion = 0;
         if (m_postProgDepth == 0) m_postProgDepth = 0;
-        if (m_postProgIQ == 0) m_postProgIQ = 0;
+		if (m_postProgIQ == 0) m_postProgIQ = 0;
+		if (m_postProgWater == 0) m_postProgWater = 0;
     }
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
@@ -154,47 +162,66 @@ void Realtime::initializeGL() {
 }
 
 void Realtime::paintGL() {
-    // Students: anything requiring OpenGL calls every frame should be done here
-    // If we're in "no scene file" mode (procedural terrain), replace terrain with IQ fullscreen shader.
-    if (settings.sceneFilePath.empty() && m_postProgIQ) {
-        // Draw directly to the default framebuffer (or the currently bound FBO)
-        GLint prevFBO = 0;
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
-        int outW = size().width() * m_devicePixelRatio;
-        int outH = size().height() * m_devicePixelRatio;
-        if (prevFBO != 0) {
-            // assume caller set viewport
-        } else {
-            glViewport(0, 0, outW, outH);
-        }
-        glDisable(GL_DEPTH_TEST);
-        glUseProgram(m_postProgIQ);
-        glBindVertexArray(m_screenVAO);
-        // Set iResolution, iTime, iFrame
-        GLint locRes = glGetUniformLocation(m_postProgIQ, "iResolution");
-        GLint locTime = glGetUniformLocation(m_postProgIQ, "iTime");
-        GLint locFrame = glGetUniformLocation(m_postProgIQ, "iFrame");
-        if (locRes >= 0) glUniform3f(locRes, float(outW), float(outH), 1.0f);
-        if (locTime >= 0) glUniform1f(locTime, m_timeSec);
-        if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
-        // Set camera uniforms for interactive control
-        GLint locCamPos  = glGetUniformLocation(m_postProgIQ, "u_camPos");
-        GLint locCamLook = glGetUniformLocation(m_postProgIQ, "u_camLook");
-        GLint locCamUp   = glGetUniformLocation(m_postProgIQ, "u_camUp");
-        GLint locFovY    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
-        glm::vec3 camPos  = m_camera.getPosition();
-        glm::vec3 camLook = m_camera.getLook();
-        glm::vec3 camUp   = m_camera.getUp();
-        float fovY        = m_camera.getFovYRadians();
-        if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
-        if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
-        if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
-        if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        // Advance frame index once per paint
-        m_frameCount++;
-        return;
-    }
+	// Students: anything requiring OpenGL calls every frame should be done here
+	// Fullscreen shader mode (used when no scene file is loaded)
+	if (settings.sceneFilePath.empty()) {
+		GLuint prog = 0;
+		if (settings.fullscreenScene == FullscreenScene::IQ) {
+			prog = m_postProgIQ;
+		} else if (settings.fullscreenScene == FullscreenScene::Water) {
+			prog = m_postProgWater;
+		}
+		if (prog != 0) {
+			// Draw directly to the default framebuffer (or the currently bound FBO)
+			GLint prevFBO = 0;
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
+			int outW = size().width() * m_devicePixelRatio;
+			int outH = size().height() * m_devicePixelRatio;
+			if (prevFBO == 0) {
+				glViewport(0, 0, outW, outH);
+			}
+			glDisable(GL_DEPTH_TEST);
+			glUseProgram(prog);
+			glBindVertexArray(m_screenVAO);
+			// Common uniforms
+			GLint locRes  = glGetUniformLocation(prog, "iResolution");
+			GLint locTime = glGetUniformLocation(prog, "iTime");
+			if (locRes  >= 0) glUniform3f(locRes,  float(outW), float(outH), 1.0f);
+			if (locTime >= 0) glUniform1f(locTime, m_timeSec);
+			// iFrame (IQ only)
+			GLint locFrame = glGetUniformLocation(prog, "iFrame");
+			if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
+			// iMouse (water uses; safe if unused)
+			GLint locMouse = glGetUniformLocation(prog, "iMouse");
+			if (locMouse >= 0) {
+				// Convert Qt coords (origin top-left) to Shadertoy-style (origin bottom-left)
+				float mouseX = m_prev_mouse_pos.x * float(m_devicePixelRatio);
+				float mouseY = (size().height() - m_prev_mouse_pos.y) * float(m_devicePixelRatio);
+				float clickX = m_mouseDown ? mouseX : 0.f;
+				float clickY = m_mouseDown ? mouseY : 0.f;
+				glUniform4f(locMouse, mouseX, mouseY, clickX, clickY);
+			}
+			// Camera uniforms for IQ shader (safe if missing)
+			GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
+			GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
+			GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
+			GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
+			if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0) {
+				glm::vec3 camPos  = m_camera.getPosition();
+				glm::vec3 camLook = m_camera.getLook();
+				glm::vec3 camUp   = m_camera.getUp();
+				float fovY        = m_camera.getFovYRadians();
+				if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
+				if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
+				if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
+				if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
+			}
+			glDrawArrays(GL_TRIANGLES, 0, 6);
+			// Advance frame index once per paint
+			m_frameCount++;
+			return;
+		}
+	}
 
     if (!m_prog || m_vertexCount == 0) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

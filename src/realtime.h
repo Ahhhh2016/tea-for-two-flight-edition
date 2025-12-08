@@ -101,6 +101,7 @@ private:
     GLuint m_postProgMotion = 0;    // Motion blur
     GLuint m_postProgDepth = 0;     // Depth debug
     GLuint m_postProgIQ = 0;        // Shadertoy rainforest full-screen shader
+	GLuint m_postProgWater = 0;     // Water full-screen shader
     GLuint m_screenVAO = 0;
     GLuint m_screenVBO = 0;
 

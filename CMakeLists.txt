@@ -91,6 +91,7 @@ qt6_add_resources(${PROJECT_NAME} "Resources"
         resources/shaders/motionblur.frag
         resources/shaders/debug_depth.frag
         resources/shaders/iq_rainforest.frag
+        resources/shaders/water.frag
 )
 
 # GLEW: this provides support for Windows (including 64-bit)

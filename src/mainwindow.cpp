@@ -239,6 +239,16 @@ void MainWindow::initialize() {
     fog->setText(QStringLiteral("Fog"));
     fog->setChecked(settings.fogEnabled);
 
+	// Fullscreen Scene toggle
+	toggleScene = new QPushButton();
+	{
+		// Initialize text based on current setting
+		QString label = (settings.fullscreenScene == FullscreenScene::Water)
+			? QStringLiteral("Scene: Water")
+			: QStringLiteral("Scene: Rainforest");
+		toggleScene->setText(label);
+	}
+
     vLayout->addWidget(uploadFile);
     vLayout->addWidget(saveImage);
     vLayout->addWidget(tesselation_label);
@@ -259,6 +269,7 @@ void MainWindow::initialize() {
     vLayout2->addWidget(ec2);
     vLayout2->addWidget(ec4);
     vLayout2->addWidget(fog);
+	vLayout2->addWidget(toggleScene);
 
     // DOF block to second column
     vLayout2->addWidget(dof_label);
@@ -313,6 +324,7 @@ void MainWindow::connectUIElements() {
     connectMaxBlurRadius();
     connect(fog, &QCheckBox::toggled, this, &MainWindow::onFogToggled);
     connectExtraCredit();
+	connect(toggleScene, &QPushButton::clicked, this, &MainWindow::onToggleScene);
 }
 
 
@@ -537,4 +549,16 @@ void MainWindow::onExtraCredit4() {
 void MainWindow::onFogToggled(bool checked) {
     settings.fogEnabled = checked;
     realtime->settingsChanged();
+}
+
+void MainWindow::onToggleScene() {
+	// Toggle between IQ and Water
+	if (settings.fullscreenScene == FullscreenScene::IQ) {
+		settings.fullscreenScene = FullscreenScene::Water;
+		toggleScene->setText(QStringLiteral("Scene: Water"));
+	} else {
+		settings.fullscreenScene = FullscreenScene::IQ;
+		toggleScene->setText(QStringLiteral("Scene: Rainforest"));
+	}
+	realtime->settingsChanged();
 }

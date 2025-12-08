@@ -3,12 +3,20 @@
 
 #include <string>
 
+enum class FullscreenScene {
+	None = 0,
+	IQ = 1,
+	Water = 2
+};
+
 struct Settings {
     std::string sceneFilePath;
     int shapeParameter1 = 1;
     int shapeParameter2 = 1;
     float nearPlane = 1;
     float farPlane = 1;
+	// Fullscreen scene selection (used when no scene file is loaded)
+	FullscreenScene fullscreenScene = FullscreenScene::IQ;
     // Depth of Field settings
     float focusDist = 3.0f;       // u_focusDist
     float focusRange = 0.75f;     // u_focusRange

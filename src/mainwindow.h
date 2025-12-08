@@ -67,6 +67,8 @@ private:
     QCheckBox *ec4;
     // Rendering toggles
     QCheckBox *fog;
+	// Fullscreen scene toggle
+	QPushButton *toggleScene;
 
 private slots:
     // From old Project 6
@@ -95,4 +97,6 @@ private slots:
     void onExtraCredit4();
     // Rendering toggles:
     void onFogToggled(bool checked);
+	// Scene toggle:
+	void onToggleScene();
 };
