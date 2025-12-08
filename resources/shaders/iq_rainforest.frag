@@ -15,6 +15,16 @@ uniform vec3  iResolution; // (width, height, 1)
 uniform float iTime;
 uniform int   iFrame;
 
+#ifdef GL_ES
+precision highp float;
+#endif
+
+// Camera uniforms provided by host app
+uniform vec3  u_camPos;   // camera world position
+uniform vec3  u_camLook;  // camera look direction (normalized)
+uniform vec3  u_camUp;    // camera up direction (normalized)
+uniform float u_camFovY;  // vertical field of view, radians
+
 #define LOWQUALITY
 
 //==========================================================================================
@@ -69,7 +79,7 @@ float hash1( float n )
     return fract( n*17.0*fract( n*0.3183099 ) );
 }
 
-vec2 hash2( vec2 p ) 
+vec2 hash2( vec2 p )
 {
     const vec2 k = vec2( 0.3183099, 0.3678794 );
     float n = 111.0*p.x + 113.0*p.y;
@@ -94,7 +104,7 @@ vec4 noised( in vec3 x )
 #endif
 
     float n = p.x + 317.0*p.y + 157.0*p.z;
-    
+
     float a = hash1(n+0.0);
     float b = hash1(n+1.0);
     float c = hash1(n+317.0);
@@ -113,7 +123,7 @@ vec4 noised( in vec3 x )
     float k6 =   a - b - e + f;
     float k7 = - a + b + c - d + e - f - g + h;
 
-    return vec4( -1.0+2.0*(k0 + k1*u.x + k2*u.y + k3*u.z + k4*u.x*u.y + k5*u.y*u.z + k6*u.z*u.x + k7*u.x*u.y*u.z), 
+    return vec4( -1.0+2.0*(k0 + k1*u.x + k2*u.y + k3*u.z + k4*u.x*u.y + k5*u.y*u.z + k6*u.z*u.x + k7*u.x*u.y*u.z),
                       2.0* du * vec3( k1 + k4*u.y + k6*u.z + k7*u.y*u.z,
                                       k2 + k5*u.z + k4*u.x + k7*u.z*u.x,
                                       k3 + k6*u.x + k5*u.y + k7*u.x*u.y ) );
@@ -123,15 +133,15 @@ float noise( in vec3 x )
 {
     vec3 p = floor(x);
     vec3 w = fract(x);
-    
+
 #if 1
     vec3 u = w*w*w*(w*(w*6.0-15.0)+10.0);
 #else
     vec3 u = w*w*(3.0-2.0*w);
 #endif
-    
+
     float n = p.x + 317.0*p.y + 157.0*p.z;
-    
+
     float a = hash1(n+0.0);
     float b = hash1(n+1.0);
     float c = hash1(n+317.0);
@@ -164,7 +174,7 @@ vec3 noised( in vec2 x )
     vec2 u = w*w*(3.0-2.0*w);
     vec2 du = 6.0*w*(1.0-w);
 #endif
-    
+
     float a = hash1(p+vec2(0,0));
     float b = hash1(p+vec2(1,0));
     float c = hash1(p+vec2(0,1));
@@ -175,7 +185,7 @@ vec3 noised( in vec2 x )
     float k2 = c - a;
     float k4 = a - b - c + d;
 
-    return vec3( -1.0+2.0*(k0 + k1*u.x + k2*u.y + k4*u.x*u.y), 
+    return vec3( -1.0+2.0*(k0 + k1*u.x + k2*u.y + k4*u.x*u.y),
                  2.0*du * vec2( k1 + k4*u.y,
                                 k2 + k4*u.x ) );
 }
@@ -194,7 +204,7 @@ float noise( in vec2 x )
     float b = hash1(p+vec2(1,0));
     float c = hash1(p+vec2(0,1));
     float d = hash1(p+vec2(1,1));
-    
+
     return -1.0+2.0*(a + (b-a)*u.x + (c-a)*u.y + (a - b - c + d)*u.x*u.y);
 }
 
@@ -260,7 +270,7 @@ vec4 fbmd_7( in vec3 x )
     for( int i=ZERO; i<7; i++ )
     {
         vec4 n = noised(x);
-        a += b*n.x;          // accumulate values        
+        a += b*n.x;          // accumulate values
         d += b*m*n.yzw;      // accumulate derivatives
         b *= s;
         x = f*m3*x;
@@ -282,7 +292,7 @@ vec4 fbmd_8( in vec3 x )
     for( int i=ZERO; i<8; i++ )
     {
         vec4 n = noised(x);
-        a += b*n.x;          // accumulate values        
+        a += b*n.x;          // accumulate values
         if( i<4 )
         d += b*m*n.yzw;      // accumulate derivatives
         b *= s;
@@ -305,7 +315,7 @@ float fbm_9( in vec2 x )
         b *= s;
         x = f*m2*x;
     }
-    
+
     return a;
 }
 
@@ -320,7 +330,7 @@ vec3 fbmd_9( in vec2 x )
     for( int i=ZERO; i<9; i++ )
     {
         vec3 n = noised(x);
-        a += b*n.x;          // accumulate values        
+        a += b*n.x;          // accumulate values
         d += b*m*n.yz;       // accumulate derivatives
         b *= s;
         x = f*m2*x;
@@ -344,7 +354,7 @@ const float kMaxHeight = 840.0;
 
 vec3 fog( in vec3 col, float t )
 {
-    vec3 ext = exp2(-t*0.00025*vec3(1,1.5,4)); 
+    vec3 ext = exp2(-t*0.00025*vec3(1,1.5,4));
     return col*ext + (1.0-ext)*vec3(0.55,0.55,0.58); // 0.55
 }
 
@@ -361,17 +371,17 @@ vec4 cloudsMap( in vec3 pos, out float nnd )
 {
     float d = abs(pos.y-900.0)-40.0;
     vec3 gra = vec3(0.0,sign(pos.y-900.0),0.0);
-    
+
     vec4 n = cloudsFbm(pos);
     d += 400.0*n.x * (0.7+0.3*gra.y);
-    
+
     if( d>0.0 ) return vec4(-d,0.0,0.0,0.0);
-    
+
     nnd = -d;
     d = min(-d/100.0,0.25);
-    
+
     //gra += 0.1*n.yzw *  (0.7+0.3*gra.y);
-    
+
     return vec4( d, gra );
 }
 
@@ -399,20 +409,20 @@ vec4 renderClouds( in vec3 ro, in vec3 rd, float tmin, float tmax, inout float r
     float lastT = -1.0;
     float thickness = 0.0;
     for(int i=ZERO; i<128; i++)
-    { 
-        vec3  pos = ro + t*rd; 
+    {
+        vec3  pos = ro + t*rd;
         float nnd;
-        vec4  denGra = cloudsMap( pos, nnd ); 
+        vec4  denGra = cloudsMap( pos, nnd );
         float den = denGra.x;
         float dt = max(0.2,0.011*t);
-        if( den>0.001 ) 
-        { 
+        if( den>0.001 )
+        {
             float kk;
             cloudsMap( pos+kSunDir*70.0, kk );
             float sha = 1.0-smoothstep(-200.0,200.0,kk); sha *= 1.5;
-            
+
             vec3 nor = normalize(denGra.yzw);
-            float dif = clamp( 0.4+0.6*dot(nor,kSunDir), 0.0, 1.0 )*sha; 
+            float dif = clamp( 0.4+0.6*dot(nor,kSunDir), 0.0, 1.0 )*sha;
             float fre = clamp( 1.0+dot(nor,rd), 0.0, 1.0 )*sha;
             float occ = 0.2+0.7*max(1.0-kk/200.0,0.0) + 0.1*(1.0-den);
             // lighting
@@ -428,15 +438,15 @@ vec4 renderClouds( in vec3 ro, in vec3 rd, float tmin, float tmax, inout float r
 
             col = fog( col, t );
 
-            // front to back blending    
+            // front to back blending
             float alp = clamp(den*0.5*0.125*dt,0.0,1.0);
             col.rgb *= alp;
             sum = sum + vec4(col,alp)*(1.0-sum.a);
 
             thickness += dt*den;
-            if( lastT<0.0 ) lastT = t;            
+            if( lastT<0.0 ) lastT = t;
         }
-        else 
+        else
         {
             dt = abs(den)+0.2;
 
@@ -444,9 +454,9 @@ vec4 renderClouds( in vec3 ro, in vec3 rd, float tmin, float tmax, inout float r
         t += dt;
         if( sum.a>0.995 || t>tmax ) break;
     }
-    
+
     if( lastT>0.0 ) resT = min(resT,lastT);
-    
+
     sum.xyz += max(0.0,1.0-0.0125*thickness)*vec3(1.00,0.60,0.40)*0.3*pow(clamp(dot(kSunDir,rd),0.0,1.0),32.0);
 
     return clamp( sum, 0.0, 1.0 );
@@ -461,10 +471,10 @@ vec2 terrainMap( in vec2 p )
     float e = fbm_9( p/2000.0 + vec2(1.0,-2.0) );
     float a = 1.0-smoothstep( 0.12, 0.13, abs(e+0.12) ); // flag high-slope areas (-0.25, 0.0)
     e = 600.0*e + 600.0;
-    
+
     // cliff
     e += 90.0*smoothstep( 552.0, 594.0, e );
-    
+
     return vec2(e,a);
 }
 
@@ -478,7 +488,7 @@ vec4 terrainMapD( in vec2 p )
     vec2 c = smoothstepd( 550.0, 600.0, e.x );
     e.x  = e.x  + 90.0*c.x;
     e.yz = e.yz + 90.0*c.y*e.yz;     // chain rule
-    
+
     e.yz /= 2000.0;
     return vec4( e.x, normalize( vec3(-e.y,1.0,-e.z) ) );
 }
@@ -487,12 +497,12 @@ vec3 terrainNormal( in vec2 pos )
 {
 #if 1
     return terrainMapD(pos).yzw;
-#else    
+#else
     vec2 e = vec2(0.03,0.0);
     return normalize( vec3(terrainMap(pos-e.xy).x - terrainMap(pos+e.xy).x,
                            2.0*e.x,
                            terrainMap(pos-e.yx).x - terrainMap(pos+e.yx).x ) );
-#endif    
+#endif
 }
 
 float terrainShadow( in vec3 ro, in vec3 rd, in float mint )
@@ -528,11 +538,11 @@ vec2 raymarchTerrain( in vec3 ro, in vec3 rd, float tmin, float tmax )
     // bounding plane
     float tp = (kMaxHeight+kMaxTreeHeight-ro.y)/rd.y;
     if( tp>0.0 ) tmax = min( tmax, tp );
-    
+
     // raymarch
     float dis, th;
     float t2 = -1.0;
-    float t = tmin; 
+    float t = tmin;
     float ot = t;
     float odis = 0.0;
     float odis2 = 0.0;
@@ -546,7 +556,7 @@ vec2 raymarchTerrain( in vec3 ro, in vec3 rd, float tmin, float tmax )
 
         // tree envelope
         float dis2 = pos.y - (hei+kMaxTreeHeight*1.1);
-        if( dis2<th ) 
+        if( dis2<th )
         {
             if( t2<0.0 )
             {
@@ -554,11 +564,11 @@ vec2 raymarchTerrain( in vec3 ro, in vec3 rd, float tmin, float tmax )
             }
         }
         odis2 = dis2;
-        
+
         // terrain
         dis = pos.y - hei;
         if( dis<th ) break;
-        
+
         ot = t;
         odis = dis;
         t += dis*0.8*(1.0-0.75*env.y); // slow down in step areas
@@ -567,7 +577,7 @@ vec2 raymarchTerrain( in vec3 ro, in vec3 rd, float tmin, float tmax )
 
     if( t>tmax ) t = -1.0;
     else t = ot + (th-odis)*(t-ot)/(dis-odis); // linear interpolation for better accuracy
-    
+
     return vec2(t,t2);
 }
 
@@ -580,9 +590,9 @@ float treesMap( in vec3 p, in float rt, out float oHei, out float oMat, out floa
     oHei = 1.0;
     oDis = 0.0;
     oMat = 0.0;
-        
-    float base = terrainMap(p.xz).x; 
-    
+
+    float base = terrainMap(p.xz).x;
+
     float bb = fbm_4(p.xz*0.075);
 
     float d = 20.0;
@@ -600,13 +610,13 @@ float treesMap( in vec3 p, in float rt, out float oHei, out float oMat, out floa
         float width = 0.5 + 0.2*v.x + 0.3*v.y;
 
         if( bb<0.0 ) width *= 0.5; else height *= 0.7;
-        
+
         vec3  q = vec3(r.x,p.y-base-height*0.5,r.y);
-        
+
         float k = sdEllipsoidY( q, vec2(width,0.5*height) );
 
         if( k<d )
-        { 
+        {
             d = k;
             oMat = 0.5*hash1(n+g+111.0);
             if( bb>0.0 ) oMat += 0.5;
@@ -625,7 +635,7 @@ float treesMap( in vec3 p, in float rt, out float oHei, out float oMat, out floa
         d += 4.0*s*att;
         oDis = s*att;
     }
-    
+
     return d;
 }
 
@@ -659,13 +669,13 @@ float treesShadow( in vec3 ro, in vec3 rd )
 vec3 treesNormal( in vec3 pos, in float t )
 {
     float kk1, kk2, kk3;
-#if 0    
+#if 0
     const float eps = 0.005;
     vec2 e = vec2(1.0,-1.0)*0.5773*eps;
-    return normalize( e.xyy*treesMap( pos + e.xyy, t, kk1, kk2, kk3 ) + 
-                      e.yyx*treesMap( pos + e.yyx, t, kk1, kk2, kk3 ) + 
-                      e.yxy*treesMap( pos + e.yxy, t, kk1, kk2, kk3 ) + 
-                      e.xxx*treesMap( pos + e.xxx, t, kk1, kk2, kk3 ) );            
+    return normalize( e.xyy*treesMap( pos + e.xyy, t, kk1, kk2, kk3 ) +
+                      e.yyx*treesMap( pos + e.yyx, t, kk1, kk2, kk3 ) +
+                      e.yxy*treesMap( pos + e.yxy, t, kk1, kk2, kk3 ) +
+                      e.xxx*treesMap( pos + e.xxx, t, kk1, kk2, kk3 ) );
 #else
     // inspired by tdhooper and klems - a way to prevent the compiler from inlining map() 4 times
     vec3 n = vec3(0.0);
@@ -675,7 +685,7 @@ vec3 treesNormal( in vec3 pos, in float t )
         n += e*treesMap(pos+0.005*e, t, kk1, kk2, kk3);
     }
     return normalize(n);
-#endif    
+#endif
 }
 
 //------------------------------------------------------------------------------------------
@@ -684,7 +694,7 @@ vec3 treesNormal( in vec3 pos, in float t )
 
 vec3 renderSky( in vec3 ro, in vec3 rd )
 {
-    // background sky     
+    // background sky
     vec3 col = vec3(0.42,0.62,1.1) - rd.y*0.4;
 
     // clouds
@@ -696,11 +706,11 @@ vec3 renderSky( in vec3 ro, in vec3 rd )
         float dl = smoothstep(-0.2,0.6,cl);
         col = mix( col, vec3(1.0), 0.12*dl );
     }
-    
-    // sun glare    
+
+    // sun glare
     float sun = clamp( dot(kSunDir,rd), 0.0, 1.0 );
     col += 0.2*vec3(1.0,0.6,0.3)*pow( sun, 32.0 );
-    
+
     return col;
 }
 
@@ -710,25 +720,33 @@ vec3 renderSky( in vec3 ro, in vec3 rd )
 
 void mainImage( out vec4 outColor, in vec2 fragCoord )
 {
-    vec2 o = hash2( vec2(iFrame,1) ) - 0.5;
-    
+    // Disable per-frame subpixel jitter (was used for TAA). Keeps geometry stable across frames.
+    vec2 o = vec2(0.0);
+
     vec2 p = (2.0*(fragCoord+o)-iResolution.xy)/ iResolution.y;
-    
+
     //----------------------------------
     // setup
     //----------------------------------
 
-    // camera
-    float time = iTime;
-    vec3 ro = vec3(0.0, 401.5, 6.0);
-    vec3 ta = vec3(0.0, 403.5, -90.0 + ro.z );
-    
-    ro.x -= 80.0*sin(0.01*time);
-    ta.x -= 86.0*sin(0.01*time);
+    // camera from host (CPU) via uniforms, remapped to shader world scale
+    vec3 roCPU = u_camPos;
+    vec3 fCPU  = normalize(u_camLook);
+    // Map typical CPU camera units (~1-10) to shader's kilometer-scale world
+    float S = 500.0;                  // world scale
+    vec3  offset = vec3(0.0, 600.0, 0.0); // lift camera above ground
+    vec3  ro = roCPU * S + offset;
+    vec3  ta = ro + fCPU * S;
 
-    // ray
-    mat3 ca = setCamera( ro, ta, 0.0 );
-    vec3 rd = ca * normalize( vec3(p,1.5));
+    // build camera basis from CPU-provided look/up
+    vec3 cw = normalize(ta - ro);
+    vec3 upN = normalize(u_camUp);
+    vec3 cu = normalize(cross(cw, upN));
+    vec3 cv = normalize(cross(cu, cw));
+    mat3 ca = mat3(cu, cv, cw);
+    // map screen to ray with given vertical FOV
+    float invF = 1.0 / tan(0.5 * u_camFovY);
+    vec3 rd = ca * normalize(vec3(p, invF));
 
     float resT = 2000.0;
 
@@ -755,15 +773,15 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
         // raycast trees, if needed
         //----------------------------------
         float hei, mid, displa;
-        
+
         if( t.y>0.0 )
         {
             float tf = t.y;
             float tfMax = (t.x>0.0)?t.x:tmax;
-            for(int i=ZERO; i<64; i++) 
-            { 
-                vec3  pos = ro + tf*rd; 
-                float dis = treesMap( pos, tf, hei, mid, displa); 
+            for(int i=ZERO; i<64; i++)
+            {
+                vec3  pos = ro + tf*rd;
+                float dis = treesMap( pos, tf, hei, mid, displa);
                 if( dis<(0.000125*tf) ) break;
                 tf += dis;
                 if( tf>tfMax ) break;
@@ -785,14 +803,14 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
 
             float sha1  = terrainShadow( pos+vec3(0,0.02,0), kSunDir, 0.02 );
             sha1 *= smoothstep(-0.325,-0.075,cloudsShadowFlat(epos, kSunDir));
-            
+
 #ifndef LOWQUALITY
             float sha2  = treesShadow( pos+vec3(0,0.02,0), kSunDir );
 #endif
 
             vec3 tnor = terrainNormal( pos.xz );
             vec3 nor;
-            
+
             vec3 speC = vec3(1.0);
             //----------------------------------
             // terrain
@@ -804,8 +822,8 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
 
                 col = vec3(0.18,0.12,0.10)*.85;
 
-                col = 1.0*mix( col, vec3(0.1,0.1,0.0)*0.2, smoothstep(0.7,0.9,nor.y) );      
-                float dif = clamp( dot( nor, kSunDir), 0.0, 1.0 ); 
+                col = 1.0*mix( col, vec3(0.1,0.1,0.0)*0.2, smoothstep(0.7,0.9,nor.y) );
+                float dif = clamp( dot( nor, kSunDir), 0.0, 1.0 );
                 dif *= sha1;
 #ifndef LOWQUALITY
                 dif *= sha2;
@@ -815,7 +833,7 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
                 float foc = clamp( (pos.y/2.0-180.0)/130.0, 0.0,1.0);
                 float dom = clamp( 0.5 + 0.5*nor.y, 0.0, 1.0 );
                 vec3  lin  = 1.0*0.2*mix(0.1*vec3(0.1,0.2,0.1),vec3(0.7,0.9,1.5)*3.0,dom)*foc;
-                      lin += 1.0*8.5*vec3(1.0,0.9,0.8)*dif;        
+                      lin += 1.0*8.5*vec3(1.0,0.9,0.8)*dif;
                       lin += 1.0*0.27*vec3(1.1,1.0,0.9)*bac*foc;
                 speC = vec3(4.0)*dif*smoothstep(20.0,0.0,abs(pos.y/2.0-310.0)-20.0);
 
@@ -827,13 +845,13 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
             else // if( obj==2 )
             {
                 vec3 gnor = treesNormal( pos, resT );
-                
+
                 nor = normalize( gnor + 2.0*tnor );
 
                 // --- lighting ---
                 vec3  ref = reflect(rd,nor);
                 float occ = clamp(hei,0.0,1.0) * pow(1.0-2.0*displa,3.0);
-                float dif = clamp( 0.1 + 0.9*dot( nor, kSunDir), 0.0, 1.0 ); 
+                float dif = clamp( 0.1 + 0.9*dot( nor, kSunDir), 0.0, 1.0 );
                 dif *= sha1;
                 if( dif>0.0001 )
                 {
@@ -848,7 +866,7 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
                     dif *= a+(1.0-a)*sha2;
                 }
                 float dom = clamp( 0.5 + 0.5*nor.y, 0.0, 1.0 );
-                float bac = clamp( 0.5+0.5*dot(normalize(vec3(-kSunDir.x,0.0,-kSunDir.z)),nor), 0.0, 1.0 );                 
+                float bac = clamp( 0.5+0.5*dot(normalize(vec3(-kSunDir.x,0.0,-kSunDir.z)),nor), 0.0, 1.0 );
                 float fre = clamp(1.0+dot(nor,rd),0.0,1.0);
 
                 // --- lights ---
@@ -869,7 +887,7 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
             }
 
             // spec
-            vec3  ref = reflect(rd,nor);            
+            vec3  ref = reflect(rd,nor);
             float fre = clamp(1.0+dot(nor,rd),0.0,1.0);
             float spe = 3.0*pow( clamp(dot(ref,kSunDir),0.0, 1.0), 9.0 )*(0.05+0.95*pow(fre,5.0));
             col += spe*speC;
@@ -891,16 +909,16 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
     //----------------------------------
     // final
     //----------------------------------
-    
-    // sun glare    
+
+    // sun glare
     float sun = clamp( dot(kSunDir,rd), 0.0, 1.0 );
     col += 0.25*vec3(0.8,0.4,0.2)*pow( sun, 4.0 );
- 
+
     // gamma
     col = pow( clamp(col*1.1-0.02,0.0,1.0), vec3(0.4545) );
     // contrast
-    col = col*col*(3.0-2.0*col);            
-    // color grade    
+    col = col*col*(3.0-2.0*col);
+    // color grade
     col = pow( col, vec3(1.0,0.92,1.0) );   // soft green
     col *= vec3(1.02,0.99,0.9 );            // tint red
     col.z = col.z+0.1;                      // bias blue

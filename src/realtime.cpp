@@ -177,6 +177,19 @@ void Realtime::paintGL() {
         if (locRes >= 0) glUniform3f(locRes, float(outW), float(outH), 1.0f);
         if (locTime >= 0) glUniform1f(locTime, m_timeSec);
         if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
+        // Set camera uniforms for interactive control
+        GLint locCamPos  = glGetUniformLocation(m_postProgIQ, "u_camPos");
+        GLint locCamLook = glGetUniformLocation(m_postProgIQ, "u_camLook");
+        GLint locCamUp   = glGetUniformLocation(m_postProgIQ, "u_camUp");
+        GLint locFovY    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
+        glm::vec3 camPos  = m_camera.getPosition();
+        glm::vec3 camLook = m_camera.getLook();
+        glm::vec3 camUp   = m_camera.getUp();
+        float fovY        = m_camera.getFovYRadians();
+        if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
+        if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
+        if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
+        if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         // Advance frame index once per paint
         m_frameCount++;
