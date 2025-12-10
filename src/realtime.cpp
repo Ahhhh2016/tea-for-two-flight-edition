@@ -224,8 +224,25 @@ void Realtime::initializeGL() {
     m_frameCount = 0;
 }
 
-void Realtime::paintGL() {
-	// Students: anything requiring OpenGL calls every frame should be done here
+SceneRenderMode Realtime::computeRenderMode() const {
+    // Fullscreen IQ or Water → procedural shader
+    if (settings.sceneFilePath.empty() &&
+        (settings.fullscreenScene == FullscreenScene::IQ ||
+         settings.fullscreenScene == FullscreenScene::Water)) {
+        return SceneRenderMode::FullscreenProcedural;
+    }
+
+    // Fullscreen Planet → geometry, but type = planet
+    if (settings.sceneFilePath.empty() &&
+        settings.fullscreenScene == FullscreenScene::Planet) {
+        return SceneRenderMode::PlanetGeometryScene;
+    }
+
+    // If there is a scene file:
+    return SceneRenderMode::GeometryScene;
+}
+
+void Realtime::renderFullscreenProcedural(){
     bool fullscreenProcedural = settings.sceneFilePath.empty() &&
                                 (settings.fullscreenScene == FullscreenScene::IQ ||
                                  settings.fullscreenScene == FullscreenScene::Water);
@@ -314,21 +331,21 @@ void Realtime::paintGL() {
                 float clickY = m_mouseDown ? mouseY : 0.f;
                 glUniform4f(locMouseB, mouseX, mouseY, clickX, clickY);
             }
- 			// Camera uniforms for Water shader (to mirror rainforest controls)
- 			GLint locCamPosB  = glGetUniformLocation(m_postProgWater, "u_camPos");
- 			GLint locCamLookB = glGetUniformLocation(m_postProgWater, "u_camLook");
- 			GLint locCamUpB   = glGetUniformLocation(m_postProgWater, "u_camUp");
- 			GLint locFovYB    = glGetUniformLocation(m_postProgWater, "u_camFovY");
- 			if (locCamPosB >= 0 || locCamLookB >= 0 || locCamUpB >= 0 || locFovYB >= 0) {
- 				glm::vec3 camPos  = m_camera.getPosition();
- 				glm::vec3 camLook = m_camera.getLook();
- 				glm::vec3 camUp   = m_camera.getUp();
- 				float fovY        = m_camera.getFovYRadians();
- 				if (locCamPosB  >= 0) glUniform3f(locCamPosB,  camPos.x,  camPos.y,  camPos.z);
- 				if (locCamLookB >= 0) glUniform3f(locCamLookB, camLook.x, camLook.y, camLook.z);
- 				if (locCamUpB   >= 0) glUniform3f(locCamUpB,   camUp.x,   camUp.y,   camUp.z);
- 				if (locFovYB    >= 0) glUniform1f(locFovYB,    fovY);
- 			}
+            // Camera uniforms for Water shader (to mirror rainforest controls)
+            GLint locCamPosB  = glGetUniformLocation(m_postProgWater, "u_camPos");
+            GLint locCamLookB = glGetUniformLocation(m_postProgWater, "u_camLook");
+            GLint locCamUpB   = glGetUniformLocation(m_postProgWater, "u_camUp");
+            GLint locFovYB    = glGetUniformLocation(m_postProgWater, "u_camFovY");
+            if (locCamPosB >= 0 || locCamLookB >= 0 || locCamUpB >= 0 || locFovYB >= 0) {
+                glm::vec3 camPos  = m_camera.getPosition();
+                glm::vec3 camLook = m_camera.getLook();
+                glm::vec3 camUp   = m_camera.getUp();
+                float fovY        = m_camera.getFovYRadians();
+                if (locCamPosB  >= 0) glUniform3f(locCamPosB,  camPos.x,  camPos.y,  camPos.z);
+                if (locCamLookB >= 0) glUniform3f(locCamLookB, camLook.x, camLook.y, camLook.z);
+                if (locCamUpB   >= 0) glUniform3f(locCamUpB,   camUp.x,   camUp.y,   camUp.z);
+                if (locFovYB    >= 0) glUniform1f(locFovYB,    fovY);
+            }
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
             // 2) Render Scene A (IQ rainforest) to screen
@@ -368,14 +385,14 @@ void Realtime::paintGL() {
             glUseProgram(m_portalProg);
             GLint locSamp = glGetUniformLocation(m_portalProg, "u_portalTex");
             GLint locAlpha = glGetUniformLocation(m_portalProg, "u_alpha");
-			GLint locM = glGetUniformLocation(m_portalProg, "u_M");
-			GLint locV = glGetUniformLocation(m_portalProg, "u_V");
-			GLint locP = glGetUniformLocation(m_portalProg, "u_P");
+            GLint locM = glGetUniformLocation(m_portalProg, "u_M");
+            GLint locV = glGetUniformLocation(m_portalProg, "u_V");
+            GLint locP = glGetUniformLocation(m_portalProg, "u_P");
             if (locSamp >= 0) glUniform1i(locSamp, 0);
             if (locAlpha >= 0) glUniform1f(locAlpha, 1.0f);
-			if (locM >= 0) glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(m_portalModel));
-			if (locV >= 0) glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(m_camera.getViewMatrix()));
-			if (locP >= 0) glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(m_camera.getProjectionMatrix()));
+            if (locM >= 0) glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(m_portalModel));
+            if (locV >= 0) glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(m_camera.getViewMatrix()));
+            if (locP >= 0) glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(m_camera.getProjectionMatrix()));
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
             glBindVertexArray(m_portalVAO);
@@ -383,34 +400,85 @@ void Realtime::paintGL() {
             glDisable(GL_BLEND);
             return;
         }
-	}
+    }
+}
+void Realtime::renderPlanetScene() {
+
+    GLint prevFBO;
+    glm::mat4 V, P;
+
+    // 1. Geometry Pass (shared)
+    runGeometryPass(prevFBO, V, P);
+
+    // 2. Post-process: TOON ONLY
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+    int outW = size().width() * m_devicePixelRatio;
+    int outH = size().height() * m_devicePixelRatio;
+    glViewport(0, 0, outW, outH);
+    glDisable(GL_DEPTH_TEST);
+
+    glUseProgram(m_postProgToon);
+    glBindVertexArray(m_screenVAO);
+
+    // Texture bindings
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_sceneTex"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
+
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_depthTex"), 1);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
+
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_normalTex"), 2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_sceneNormalTex);
+
+    glUniform1f(glGetUniformLocation(m_postProgToon, "u_near"), settings.nearPlane);
+    glUniform1f(glGetUniformLocation(m_postProgToon, "u_far"),  settings.farPlane);
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_enablePost"), 1);
+
+    // Sky texture
+    GLint locSky = glGetUniformLocation(m_postProgToon, "u_skyTex");
+    if (locSky >= 0 && m_skyTex != 0) {
+        glUniform1i(locSky, 3);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, m_skyTex);
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Update previous matrices
+    m_prevV = V;
+    m_prevP = P;
+    for (auto &d : m_draws) d.prevModel = d.model;
+}
+
+void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
 
     if (!m_prog || m_vertexCount == 0) {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         return;
     }
 
-    // Save currently bound draw framebuffer into prevFBO
-    GLint prevFBO = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
 
     // Pass 1: render scene into offscreen FBO
     glBindFramebuffer(GL_FRAMEBUFFER, m_sceneFBO);
     glViewport(0, 0, m_fbWidth, m_fbHeight);
-    // Clear color and velocity attachments separately
+
     {
         const float colorClear[4] = {1.f, 1.f, 1.f, 1.f};
         const float velocityClear[2] = {0.f, 0.f};
         const float depthClear = 1.f;
-        const float normalClear[4]   = {0.f, 0.f, 1.f, 1.f};
-        glClearBufferfv(GL_COLOR, 0, colorClear);   // clear color
-        glClearBufferfv(GL_COLOR, 1, velocityClear); //clear velocity buffer
-        glClearBufferfv(GL_DEPTH, 0, &depthClear); // clear depth buffer
+        const float normalClear[4] = {0.f, 0.f, 1.f, 1.f};
+        glClearBufferfv(GL_COLOR, 0, colorClear);
+        glClearBufferfv(GL_COLOR, 1, velocityClear);
+        glClearBufferfv(GL_DEPTH, 0, &depthClear);
         glClearBufferfv(GL_COLOR, 2, normalClear);
     }
-    glEnable(GL_DEPTH_TEST); // enable depth test
 
-    // disable culling for terrain 
+    glEnable(GL_DEPTH_TEST);
+
     if (settings.sceneFilePath.empty()) {
         glDisable(GL_CULL_FACE);
     } else {
@@ -420,16 +488,15 @@ void Realtime::paintGL() {
     glUseProgram(m_prog);
     glBindVertexArray(m_vao);
 
-    glm::mat4 V(1.f), P(1.f);
     V = m_camera.getViewMatrix();
     P = m_camera.getProjectionMatrix();
 
+    // Upload common uniforms
     GLint uM = glGetUniformLocation(m_prog, "u_M");
     GLint uV = glGetUniformLocation(m_prog, "u_V");
     GLint uP = glGetUniformLocation(m_prog, "u_P");
     GLint uN = glGetUniformLocation(m_prog, "u_N");
 
-    // previous frame's model matrix for motion blur
     GLint uPrevM = glGetUniformLocation(m_prog, "u_prevM");
     GLint uPrevV = glGetUniformLocation(m_prog, "u_prevV");
     GLint uPrevP = glGetUniformLocation(m_prog, "u_prevP");
@@ -441,23 +508,23 @@ void Realtime::paintGL() {
     GLint uCamPos = glGetUniformLocation(m_prog, "u_camPos");
     GLint uGlobal = glGetUniformLocation(m_prog, "u_global");
 
-    // Texture uniforms
     GLint uHasTex = glGetUniformLocation(m_prog, "u_hasTexture");
     GLint uTexRepeat = glGetUniformLocation(m_prog, "u_texRepeat");
     GLint uBlend = glGetUniformLocation(m_prog, "u_blend");
     GLint uTex = glGetUniformLocation(m_prog, "u_tex");
 
-    // Fog uniforms
+    // Fog
     GLint uFogColor = glGetUniformLocation(m_prog, "u_fogColor");
     GLint uFogDensity = glGetUniformLocation(m_prog, "u_fogDensity");
     GLint uFogEnable = glGetUniformLocation(m_prog, "u_fogEnable");
 
-    // Planet uniforms
-    GLint uIsPlanet      = glGetUniformLocation(m_prog, "u_isPlanet");
-    GLint uTime          = glGetUniformLocation(m_prog, "u_time");
-    GLint uPlanetColorA  = glGetUniformLocation(m_prog, "u_planetColorA");
-    GLint uPlanetColorB  = glGetUniformLocation(m_prog, "u_planetColorB");
-    GLint uIsSand        = glGetUniformLocation(m_prog, "u_isSand");
+    // Planet-specific
+    GLint uIsPlanet = glGetUniformLocation(m_prog, "u_isPlanet");
+    GLint uTime     = glGetUniformLocation(m_prog, "u_time");
+    GLint uPlanetColorA = glGetUniformLocation(m_prog, "u_planetColorA");
+    GLint uPlanetColorB = glGetUniformLocation(m_prog, "u_planetColorB");
+    GLint uIsSand   = glGetUniformLocation(m_prog, "u_isSand");
+
     if (uTime >= 0) glUniform1f(uTime, m_timeSec);
 
     glUniformMatrix4fv(uV, 1, GL_FALSE, glm::value_ptr(V));
@@ -470,19 +537,22 @@ void Realtime::paintGL() {
     glm::vec3 globals(m_render.globalData.ka, m_render.globalData.kd, m_render.globalData.ks);
     glUniform3fv(uGlobal, 1, glm::value_ptr(globals));
 
-    if (uTex >= 0) glUniform1i(uTex, 0); // read texture from texture unit 0
+    if (uTex >= 0) glUniform1i(uTex, 0);
 
-    // Fog parameters
+    // Fog setup
     float nearZ = settings.nearPlane;
     float farZ = settings.farPlane;
-    glm::vec3 fogColor(0.85f, 0.9f, 1.0f); // blue-white fog color
+    glm::vec3 fogColor(0.85f, 0.9f, 1.0f);
     float target = 0.02f;
-    float density = (farZ > nearZ) ? (std::sqrt(std::max(0.0f, -std::log(target))) / farZ) : 0.0f;
+    float density = (farZ > nearZ)
+                        ? (std::sqrt(std::max(0.0f, -std::log(target))) / farZ)
+                        : 0.0f;
+
     if (uFogColor >= 0)   glUniform3fv(uFogColor, 1, glm::value_ptr(fogColor));
     if (uFogDensity >= 0) glUniform1f(uFogDensity, density);
     if (uFogEnable >= 0)  glUniform1i(uFogEnable, settings.fogEnabled ? 1 : 0);
 
-    // Upload lights (up to 8)
+    // Lights (unchanged)
     GLint uNumLights = glGetUniformLocation(m_prog, "u_numLights");
     GLint uLightType0 = glGetUniformLocation(m_prog, "u_lightType[0]");
     GLint uLightColor0 = glGetUniformLocation(m_prog, "u_lightColor[0]");
@@ -495,6 +565,7 @@ void Realtime::paintGL() {
     const int maxLights = 8;
     int n = std::min<int>(maxLights, static_cast<int>(m_render.lights.size()));
     glUniform1i(uNumLights, n);
+
     int types[maxLights] = {0};
     glm::vec3 colors[maxLights];
     glm::vec3 poss[maxLights];
@@ -502,16 +573,19 @@ void Realtime::paintGL() {
     glm::vec3 funcs[maxLights];
     float angles[maxLights] = {0.f};
     float pens[maxLights] = {0.f};
+
     for (int i = 0; i < n; i++) {
         const auto &L = m_render.lights[i];
-        types[i] = (L.type == LightType::LIGHT_DIRECTIONAL) ? 0 : (L.type == LightType::LIGHT_POINT ? 1 : 2);
+        types[i] = (L.type == LightType::LIGHT_DIRECTIONAL) ? 0
+                                                            : (L.type == LightType::LIGHT_POINT ? 1 : 2);
         colors[i] = glm::vec3(L.color);
-        poss[i] = glm::vec3(L.pos);
-        dirs[i] = glm::normalize(glm::vec3(L.dir));
-        funcs[i] = L.function;
+        poss[i]   = glm::vec3(L.pos);
+        dirs[i]   = glm::normalize(glm::vec3(L.dir));
+        funcs[i]  = L.function;
         angles[i] = L.angle;
-        pens[i] = L.penumbra;
+        pens[i]   = L.penumbra;
     }
+
     glUniform1iv(uLightType0, n, types);
     glUniform3fv(uLightColor0, n, glm::value_ptr(colors[0]));
     glUniform3fv(uLightPos0, n, glm::value_ptr(poss[0]));
@@ -521,169 +595,121 @@ void Realtime::paintGL() {
     glUniform1fv(uLightPenumbra0, n, pens);
 
     for (const auto &d : m_draws) {
+
         glUniformMatrix4fv(uM, 1, GL_FALSE, glm::value_ptr(d.model));
         glUniformMatrix3fv(uN, 1, GL_FALSE, glm::value_ptr(d.normalMat));
         if (uPrevM >= 0) glUniformMatrix4fv(uPrevM, 1, GL_FALSE, glm::value_ptr(d.prevModel));
 
-        if (uIsPlanet >= 0) {
-            glUniform1i(uIsPlanet, d.isPlanet ? 1 : 0);
-        }
+        if (uIsPlanet >= 0) glUniform1i(uIsPlanet, d.isPlanet);
+        if (uIsSand >= 0)   glUniform1i(uIsSand,   d.isSand);
+
         if (d.isPlanet) {
             if (uPlanetColorA >= 0) glUniform3fv(uPlanetColorA, 1, glm::value_ptr(d.planetColorA));
             if (uPlanetColorB >= 0) glUniform3fv(uPlanetColorB, 1, glm::value_ptr(d.planetColorB));
-        }
-        if (uIsSand >= 0) {
-            glUniform1i(uIsSand, d.isSand ? 1 : 0);
         }
 
         glUniform3fv(uKa, 1, glm::value_ptr(d.ka));
         glUniform3fv(uKd, 1, glm::value_ptr(d.kd));
         glUniform3fv(uKs, 1, glm::value_ptr(d.ks));
         glUniform1f(uShininess, d.shininess);
-        if (uHasTex >= 0) glUniform1i(uHasTex, d.hasTexture ? 1 : 0);
+
+        if (uHasTex >= 0) glUniform1i(uHasTex, d.hasTexture);
         if (d.hasTexture) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, d.texture);
             if (uTexRepeat >= 0) glUniform2fv(uTexRepeat, 1, glm::value_ptr(d.texRepeat));
-            if (uBlend >= 0) glUniform1f(uBlend, d.blend);
+            if (uBlend >= 0)     glUniform1f(uBlend, d.blend);
         }
+
         glDrawArrays(GL_TRIANGLES, d.first, d.count);
     }
+}
 
-    // Pass 2: post-process to previously bound framebuffer 
+void Realtime::renderGeometryScene() {
+
+    GLint prevFBO;
+    glm::mat4 V, P;
+
+    // 1. Geometry Pass
+    runGeometryPass(prevFBO, V, P);
+
+    // 2. Post-process selection
     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+
     int outW = size().width() * m_devicePixelRatio;
     int outH = size().height() * m_devicePixelRatio;
-    if (prevFBO != 0) {
-        // custom FBO, assume caller set a viewport already
-    } else {
-        // screen
-        glViewport(0, 0, outW, outH);
-    }
-    glDisable(GL_DEPTH_TEST); // disable depth test for post-processing
+    glViewport(0, 0, outW, outH);
+    glDisable(GL_DEPTH_TEST);
 
-    // Select post program
     bool useMotion = settings.extraCredit4 && !m_debugDepth;
-    bool useToon = (settings.fullscreenScene == FullscreenScene::Planet);
 
     if (m_debugDepth && m_postProgDepth) {
         glUseProgram(m_postProgDepth);
     } else if (useMotion && m_postProgMotion) {
         glUseProgram(m_postProgMotion);
-    } else if (useToon && m_postProgToon){
-        glUseProgram(m_postProgToon);
     } else {
-        glUseProgram(m_postProg);
+        glUseProgram(m_postProg);  // DOF + fog
     }
+
     glBindVertexArray(m_screenVAO);
 
     if (m_debugDepth && m_postProgDepth) {
-        // depth debug: sample depth texture and show on screen
-        GLint locDepth = glGetUniformLocation(m_postProgDepth, "u_depthTex");
-        if (locDepth >= 0) glUniform1i(locDepth, 0);
+        glUniform1i(glGetUniformLocation(m_postProgDepth, "u_depthTex"), 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
-    } else if (useMotion && m_postProgMotion) {
-        // motion blur
-        GLint locColor = glGetUniformLocation(m_postProgMotion, "u_colorTex");
-        GLint locVel = glGetUniformLocation(m_postProgMotion, "u_velocityTex");
-        GLint locTexel = glGetUniformLocation(m_postProgMotion, "u_texelSize");
-        GLint locMaxPx = glGetUniformLocation(m_postProgMotion, "u_maxBlurPixels");
-        GLint locSamples = glGetUniformLocation(m_postProgMotion, "u_numSamples");
-        if (locColor >= 0) glUniform1i(locColor, 0);
-        if (locVel >= 0) glUniform1i(locVel, 1);
-        if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(m_fbWidth), 1.0f / float(m_fbHeight));
-        if (locMaxPx >= 0) glUniform1f(locMaxPx, 16.0f);
-        if (locSamples >= 0) glUniform1i(locSamples, 12);
 
+    } else if (useMotion && m_postProgMotion) {
+        glUniform1i(glGetUniformLocation(m_postProgMotion, "u_colorTex"), 0);
+        glUniform1i(glGetUniformLocation(m_postProgMotion, "u_velocityTex"), 1);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, m_sceneVelocityTex);
-    } else if (useToon && m_postProgToon) {
-        // === TOON POST-PROCESS ===
-        // Map C++ FBO textures -> GLSL uniforms:
-        //   u_sceneTex  <- m_sceneColorTex   (unit 0)
-        //   u_depthTex  <- m_sceneDepthTex   (unit 1)
-        //   u_normalTex <- m_sceneNormalTex  (unit 2)
-        //   u_near      <- settings.nearPlane
-        //   u_far       <- settings.farPlane
-        //   u_enablePost<- true (or a setting)
-
-        GLint locScene   = glGetUniformLocation(m_postProgToon, "u_sceneTex");
-        GLint locDepth   = glGetUniformLocation(m_postProgToon, "u_depthTex");
-        GLint locNormal  = glGetUniformLocation(m_postProgToon, "u_normalTex");
-        GLint locNear    = glGetUniformLocation(m_postProgToon, "u_near");
-        GLint locFar     = glGetUniformLocation(m_postProgToon, "u_far");
-        GLint locEnable  = glGetUniformLocation(m_postProgToon, "u_enablePost");
-        // Sky texture
-        GLint locSkyTex = glGetUniformLocation(m_postProgToon, "u_skyTex");
-
-        if (locScene  >= 0) glUniform1i(locScene,  0);
-        if (locDepth  >= 0) glUniform1i(locDepth,  1);
-        if (locNormal >= 0) glUniform1i(locNormal, 2);
-        if (locNear   >= 0) glUniform1f(locNear,   settings.nearPlane);
-        if (locFar    >= 0) glUniform1f(locFar,    settings.farPlane);
-
-        bool enablePost = true;
-        if (locEnable >= 0) glUniform1i(locEnable, enablePost ? 1 : 0);
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
-
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
-
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, m_sceneNormalTex);
-
-        if (locSkyTex >= 0 && m_skyTex != 0) {
-            glUniform1i(locSkyTex, 3);
-            glActiveTexture(GL_TEXTURE3);
-            glBindTexture(GL_TEXTURE_2D, m_skyTex);
-        }
-
 
     } else {
-        // dof and fog
-        GLint locColor = glGetUniformLocation(m_postProg, "u_colorTex");
-        GLint locDepth = glGetUniformLocation(m_postProg, "u_depthTex");
-        if (locColor >= 0) glUniform1i(locColor, 0);
-        if (locDepth >= 0) glUniform1i(locDepth, 1);
+        // DOF + Fog
+        glUniform1i(glGetUniformLocation(m_postProg, "u_colorTex"), 0);
+        glUniform1i(glGetUniformLocation(m_postProg, "u_depthTex"), 1);
+        glUniform1f(glGetUniformLocation(m_postProg, "u_near"), settings.nearPlane);
+        glUniform1f(glGetUniformLocation(m_postProg, "u_far"),  settings.farPlane);
+        glUniform1f(glGetUniformLocation(m_postProg, "u_focusDist"), settings.focusDist);
+        glUniform1f(glGetUniformLocation(m_postProg, "u_focusRange"), settings.focusRange);
+        glUniform1f(glGetUniformLocation(m_postProg, "u_maxBlurRadius"), settings.maxBlurRadius);
+        glUniform1i(glGetUniformLocation(m_postProg, "u_enable"), settings.extraCredit3 ? 1 : 0);
+        glUniform2f(glGetUniformLocation(m_postProg, "u_texelSize"),
+                    1.f / float(m_fbWidth),
+                    1.f / float(m_fbHeight));
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
-
-        GLint locNear = glGetUniformLocation(m_postProg, "u_near");
-        GLint locFar = glGetUniformLocation(m_postProg, "u_far");
-        GLint locFD = glGetUniformLocation(m_postProg, "u_focusDist");
-        GLint locFR = glGetUniformLocation(m_postProg, "u_focusRange");
-        GLint locMaxR = glGetUniformLocation(m_postProg, "u_maxBlurRadius");
-        GLint locEnable = glGetUniformLocation(m_postProg, "u_enable");
-        GLint locTexel = glGetUniformLocation(m_postProg, "u_texelSize");
-
-        float nearZ = settings.nearPlane;
-        float farZ = settings.farPlane;
-        if (locNear >= 0) glUniform1f(locNear, nearZ);
-        if (locFar >= 0) glUniform1f(locFar, farZ);
-        
-        int enable = settings.extraCredit3 ? 1 : 0;
-        if (locEnable >= 0) glUniform1i(locEnable, enable);
-        if (locFD >= 0) glUniform1f(locFD, settings.focusDist);
-        if (locFR >= 0) glUniform1f(locFR, settings.focusRange);
-        if (locMaxR >= 0) glUniform1f(locMaxR, settings.maxBlurRadius);
-        if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(m_fbWidth), 1.0f / float(m_fbHeight));
     }
 
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
-    // Update previous matrices for next frame
+    // Update prev matrices
     m_prevV = V;
     m_prevP = P;
-    for (auto &d : m_draws) {
-        d.prevModel = d.model;
+    for (auto &d : m_draws) d.prevModel = d.model;
+}
+
+void Realtime::paintGL() {
+    SceneRenderMode mode = computeRenderMode();
+
+    switch (mode) {
+
+    case SceneRenderMode::FullscreenProcedural:
+        renderFullscreenProcedural();  // we will create this
+        return;
+
+    case SceneRenderMode::PlanetGeometryScene:
+        renderPlanetScene();           // we will create this
+        return;
+
+    case SceneRenderMode::GeometryScene:
+        renderGeometryScene();         // we will create this
+        return;
     }
 }
 

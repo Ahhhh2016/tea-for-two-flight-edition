@@ -18,6 +18,12 @@
 #include "utils/sceneparser.h"
 #include "utils/Camera.h"
 
+enum class SceneRenderMode {
+    FullscreenProcedural,
+    PlanetGeometryScene,
+    GeometryScene
+};
+
 class Realtime : public QOpenGLWidget
 {
 public:
@@ -44,6 +50,11 @@ private:
     void mouseMoveEvent(QMouseEvent *event) override;
     void timerEvent(QTimerEvent *event) override;
     void buildPlanetScene();
+    void runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P);
+    void renderGeometryScene();
+    void renderPlanetScene();
+    void renderFullscreenProcedural();
+    SceneRenderMode computeRenderMode() const;
 
     // Tick Related Variables
     int m_timer;                                        // Stores timer which attempts to run ~60 times per second

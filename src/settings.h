@@ -2,6 +2,7 @@
 #define SETTINGS_H
 
 #include <string>
+#include "realtime.h"
 
 enum class FullscreenScene {
 	None = 0,
@@ -30,7 +31,6 @@ struct Settings {
     bool extraCredit4 = false;
     bool fogEnabled = false;
 };
-
 
 // The global Settings object, will be initialized by MainWindow
 extern Settings settings;
