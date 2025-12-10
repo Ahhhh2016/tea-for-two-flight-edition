@@ -133,6 +133,14 @@ private:
     GLuint m_fullscreenFBO = 0;
     GLuint m_fullscreenColorTex = 0;
 
+    // Sprint speed accumulation and live speed
+    float m_moveSpeedBase = 5.0f;          // base units/sec
+    float m_sprintAccum = 0.0f;            // 0..m_sprintAccumMax
+    float m_sprintAccumMax = 2.0f;         // +200% -> 3x base
+    float m_sprintAccelPerSec = 1.5f;      // accumulation rate while holding sprint
+    float m_sprintDecayPerSec = 2.0f;      // decay rate when not holding sprint
+    float m_currentSpeedUnits = 5.0f;      // last computed current speed (units/sec)
+
     // Previous camera matrices (for motion blur reprojection)
     glm::mat4 m_prevV = glm::mat4(1.f);
     glm::mat4 m_prevP = glm::mat4(1.f);

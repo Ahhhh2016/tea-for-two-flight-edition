@@ -284,7 +284,7 @@ void Realtime::paintGL() {
                     }
                     glDrawArrays(GL_TRIANGLES, 0, 6);
 
-                    // 2) Apply directional blur to screen
+                // 2) Apply directional blur to screen
                     glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
                     if (prevFBO == 0) {
                         glViewport(0, 0, outW, outH);
@@ -299,10 +299,19 @@ void Realtime::paintGL() {
                     GLint locNS    = glGetUniformLocation(m_postProgDirectional, "u_numSamples");
                     if (locColor >= 0) glUniform1i(locColor, 0);
                     if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(outW), 1.0f / float(outH));
-                    // Use a simple horizontal blur direction; small, fast, conveys speed while sprinting
-                    if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
-                    if (locPx  >= 0) glUniform1f(locPx, 10.0f); // ~10px half-extent
-                    if (locNS  >= 0) glUniform1i(locNS, 11); // ensure odd; 11 taps
+                // Use a simple horizontal blur direction
+                if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
+                // Blur strength scales with current speed relative to base and maximum sprint
+                float maxSpeed = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
+                float speedFrac = 0.0f;
+                if (maxSpeed > m_moveSpeedBase) {
+                    speedFrac = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeed - m_moveSpeedBase), 1.0f));
+                }
+                float blurPixels = 4.0f + 14.0f * speedFrac; // 4..18px
+                int numSamples = 7 + int(10.0f * speedFrac); // 7..17
+                if ((numSamples % 2) == 0) numSamples += 1;  // ensure odd
+                if (locPx  >= 0) glUniform1f(locPx, blurPixels);
+                if (locNS  >= 0) glUniform1i(locNS, numSamples);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -486,8 +495,16 @@ void Realtime::paintGL() {
                 if (locColor >= 0) glUniform1i(locColor, 0);
                 if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(outW), 1.0f / float(outH));
                 if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
-                if (locPx  >= 0) glUniform1f(locPx, 10.0f);
-                if (locNS  >= 0) glUniform1i(locNS, 11);
+                float maxSpeed2 = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
+                float speedFrac2 = 0.0f;
+                if (maxSpeed2 > m_moveSpeedBase) {
+                    speedFrac2 = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeed2 - m_moveSpeedBase), 1.0f));
+                }
+                float blurPixels2 = 4.0f + 14.0f * speedFrac2;
+                int numSamples2 = 7 + int(10.0f * speedFrac2);
+                if ((numSamples2 % 2) == 0) numSamples2 += 1;
+                if (locPx  >= 0) glUniform1f(locPx, blurPixels2);
+                if (locNS  >= 0) glUniform1i(locNS, numSamples2);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -1211,9 +1228,16 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Use deltaTime and m_keyMap here to move around
     // Accumulate time for shaders needing iTime
     m_timeSec += deltaTime;
-    const float moveSpeed = 5.0f; // world-space units per second
-    const float sprintMultiplier = m_keyMap[Qt::Key_Shift] ? 5.0f : 1.0f;
-    const float currentSpeed = moveSpeed * sprintMultiplier;
+    const float baseSpeed = m_moveSpeedBase; // world-space units per second
+    // Sprint accumulation
+    if (m_keyMap[Qt::Key_Shift]) {
+        m_sprintAccum += m_sprintAccelPerSec * deltaTime;
+    } else {
+        m_sprintAccum -= m_sprintDecayPerSec * deltaTime;
+    }
+    m_sprintAccum = std::max(0.0f, std::min(m_sprintAccum, m_sprintAccumMax));
+    const float currentSpeed = baseSpeed * (1.0f + m_sprintAccum);
+    m_currentSpeedUnits = currentSpeed;
     glm::vec3 displacement(0.f);
 
     // Route movement to Water camera when Water is the fullscreen scene (no scenefile)
@@ -1317,7 +1341,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 				}
 			} else {
 				// recover when not actively pushing through
-				m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + moveSpeed * 0.75f * deltaTime);
+                m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + baseSpeed * 0.75f * deltaTime);
 			}
 		}
 		// Walk "back" from Water to IQ (use same rect and S key)
@@ -1333,7 +1357,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 					return;
 				}
 			} else {
-				m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + moveSpeed * 0.75f * deltaTime);
+                m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + baseSpeed * 0.75f * deltaTime);
 			}
 		}
 	}
