@@ -173,6 +173,15 @@ void Realtime::initializeGL() {
         p += glm::vec3(0.f, moveSpeed * assumedDt, 0.f);
         m_camera.setPosition(p);
     }
+    // If starting in IQ fullscreen mode (no scenefile), place camera farther back like IQ's original vantage
+    if (settings.sceneFilePath.empty() && settings.fullscreenScene == FullscreenScene::IQ) {
+        const glm::vec3 ro(0.f, 401.5f, 6.f);
+        const glm::vec3 ta(0.f, 403.5f, -84.0f); // -90 + ro.z
+        const glm::vec3 look = glm::normalize(ta - ro);
+        m_camera.setPosition(ro);
+        m_camera.setLook(look);
+        m_camera.setUp(glm::vec3(0.f, 1.f, 0.f));
+    }
 
     // Initialize previous camera matrices
     m_prevV = m_camera.getViewMatrix();
@@ -234,15 +243,29 @@ void Realtime::paintGL() {
                 GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
                 GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
                 GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
-                if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0) {
+                GLint locCamTarget = glGetUniformLocation(prog, "u_camTarget");
+                GLint locSunDir = glGetUniformLocation(prog, "u_sunDir");
+                GLint locExposure = glGetUniformLocation(prog, "u_exposure");
+                if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0 || locCamTarget >= 0) {
                     glm::vec3 camPos  = m_camera.getPosition();
                     glm::vec3 camLook = m_camera.getLook();
                     glm::vec3 camUp   = m_camera.getUp();
-                    float fovY        = m_camera.getFovYRadians();
+                    float fovY        = (prog == m_postProgIQ) ? (2.f * std::atan(1.f / 1.5f)) : m_camera.getFovYRadians();
+                    glm::vec3 camTarget = camPos + glm::normalize(camLook);
                     if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
                     if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
                     if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
                     if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
+                    if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
+                }
+                if (locSunDir >= 0) {
+                    // Original IQ rainforest sun direction
+                    const glm::vec3 sunDir(-0.624695f, 0.468521f, -0.624695f);
+                    glUniform3f(locSunDir, sunDir.x, sunDir.y, sunDir.z);
+                }
+                if (locExposure >= 0) {
+                    // Match original brightness; let shader handle grading and gamma
+                    glUniform1f(locExposure, 1.0f);
                 }
                 glDrawArrays(GL_TRIANGLES, 0, 6);
                 m_frameCount++;
@@ -304,15 +327,27 @@ void Realtime::paintGL() {
             GLint locCamLookA = glGetUniformLocation(m_postProgIQ, "u_camLook");
             GLint locCamUpA   = glGetUniformLocation(m_postProgIQ, "u_camUp");
             GLint locFovYA    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
-            if (locCamPosA >= 0 || locCamLookA >= 0 || locCamUpA >= 0 || locFovYA >= 0) {
+            GLint locCamTargetA = glGetUniformLocation(m_postProgIQ, "u_camTarget");
+            GLint locSunDirA  = glGetUniformLocation(m_postProgIQ, "u_sunDir");
+            GLint locExposureA = glGetUniformLocation(m_postProgIQ, "u_exposure");
+            if (locCamPosA >= 0 || locCamLookA >= 0 || locCamUpA >= 0 || locFovYA >= 0 || locCamTargetA >= 0) {
                 glm::vec3 camPos  = m_camera.getPosition();
                 glm::vec3 camLook = m_camera.getLook();
                 glm::vec3 camUp   = m_camera.getUp();
-                float fovY        = m_camera.getFovYRadians();
+                float fovY        = 2.f * std::atan(1.f / 1.5f);
+                glm::vec3 camTarget = camPos + glm::normalize(camLook);
                 if (locCamPosA  >= 0) glUniform3f(locCamPosA,  camPos.x,  camPos.y,  camPos.z);
                 if (locCamLookA >= 0) glUniform3f(locCamLookA, camLook.x, camLook.y, camLook.z);
                 if (locCamUpA   >= 0) glUniform3f(locCamUpA,   camUp.x,   camUp.y,   camUp.z);
                 if (locFovYA    >= 0) glUniform1f(locFovYA,    fovY);
+                if (locCamTargetA >= 0) glUniform3f(locCamTargetA, camTarget.x, camTarget.y, camTarget.z);
+            }
+            if (locSunDirA >= 0) {
+                const glm::vec3 sunDir(-0.624695f, 0.468521f, -0.624695f);
+                glUniform3f(locSunDirA, sunDir.x, sunDir.y, sunDir.z);
+            }
+            if (locExposureA >= 0) {
+                glUniform1f(locExposureA, 1.0f);
             }
             glDrawArrays(GL_TRIANGLES, 0, 6);
             m_frameCount++;
@@ -420,7 +455,7 @@ void Realtime::paintGL() {
     // Fog parameters
     float nearZ = settings.nearPlane;
     float farZ = settings.farPlane;
-    glm::vec3 fogColor(0.85f, 0.9f, 1.0f); // blue-white fog color
+    glm::vec3 fogColor(1.f, 0.5f, 1.0f); // blue-white fog color
     float target = 0.02f;
     float density = (farZ > nearZ) ? (std::sqrt(std::max(0.0f, -std::log(target))) / farZ) : 0.0f;
     if (uFogColor >= 0)   glUniform3fv(uFogColor, 1, glm::value_ptr(fogColor));
