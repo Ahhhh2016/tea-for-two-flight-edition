@@ -30,6 +30,8 @@ struct Settings {
     bool extraCredit3 = false;
     bool extraCredit4 = false;
     bool fogEnabled = false;
+
+    float rainforestIntensity = 1.0f; // 0..1, Rainforest grading strength
 };
 
 // The global Settings object, will be initialized by MainWindow
