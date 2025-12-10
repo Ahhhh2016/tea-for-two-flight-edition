@@ -1137,9 +1137,42 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
         update();
         return;
     }
-    // Toggle portal on 'O'
+	// Place/enable portal on 'O' at camera's 2 o'clock, rotate 70 deg around Y
     if (event->key() == Qt::Key_O) {
-        m_portalEnabled = !m_portalEnabled;
+		m_portalEnabled = true;
+		m_portalAutoCenterY = false; // lock placement; do not auto-follow Y afterward
+
+		// Use active camera depending on current fullscreen scene
+		const bool waterActive = (settings.fullscreenScene == FullscreenScene::Water);
+		const glm::vec3 camPos = waterActive ? m_cameraWater.getPosition() : m_camera.getPosition();
+		const glm::vec3 camLook = glm::normalize(waterActive ? m_cameraWater.getLook() : m_camera.getLook());
+
+		// Compute horizontal forward and right (XZ plane)
+		glm::vec3 forwardXZ = glm::vec3(camLook.x, 0.f, camLook.z);
+		if (glm::length(forwardXZ) < 1e-4f) {
+			forwardXZ = glm::vec3(0.f, 0.f, -1.f);
+		} else {
+			forwardXZ = glm::normalize(forwardXZ);
+		}
+		glm::vec3 rightXZ = glm::normalize(glm::cross(forwardXZ, glm::vec3(0.f, 1.f, 0.f)));
+
+		// 2 o'clock direction = 30 degrees to the right from forward (on XZ plane)
+		const float angle30 = glm::radians(30.f);
+		const float c30 = std::cos(angle30);
+		const float s30 = std::sin(angle30);
+		glm::vec3 dir2oclock = glm::normalize(c30 * forwardXZ + s30 * rightXZ);
+
+		// Place some units away from the camera, at same Y as camera
+		const float placeDist = 3.0f;
+		const glm::vec3 portalPos = camPos + dir2oclock * placeDist;
+
+		// Build model: translate to position, then yaw by +70 degrees around world Y
+		const float yawDeg = 70.f;
+		glm::mat4 M(1.f);
+		M = glm::translate(M, glm::vec3(portalPos.x, camPos.y, portalPos.z));
+		M = glm::rotate(M, glm::radians(yawDeg), glm::vec3(0.f, 1.f, 0.f));
+		m_portalModel = M;
+
         update();
         return;
     }
@@ -1313,7 +1346,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
  
 		// Keep the portal centered at the active camera's height so the ray test
 		// can hit the portal rectangle from either side (IQ or Water)
-		if (settings.sceneFilePath.empty() && m_portalEnabled) {
+		if (settings.sceneFilePath.empty() && m_portalEnabled && m_portalAutoCenterY) {
 			const bool waterActiveNow = (settings.fullscreenScene == FullscreenScene::Water);
 			const float camY = waterActiveNow ? m_cameraWater.getPosition().y : m_camera.getPosition().y;
 			m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, camY, 0.f));

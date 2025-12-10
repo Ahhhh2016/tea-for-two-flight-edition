@@ -118,6 +118,7 @@ private:
     GLuint m_portalVBO = 0;
 	glm::mat4 m_portalModel = glm::mat4(1.f); // world transform of the portal quad (XY plane)
 	float     m_portalHalfSize = 0.5f;        // half-extent in local X/Y
+	bool      m_portalAutoCenterY = false;    // if true, keep portal centered at active camera's Y every frame
 
     // Portal traversal state
     float m_portalDepthMax = 1.0f;    // virtual distance to traverse through portal
