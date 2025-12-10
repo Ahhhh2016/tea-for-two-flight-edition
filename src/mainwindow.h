@@ -60,6 +60,10 @@ private:
     QDoubleSpinBox *focusRangeBox;
     QDoubleSpinBox *maxBlurRadiusBox;
 
+    // Rainforest intensity controls
+    QSlider *iqIntensitySlider;
+    QDoubleSpinBox *iqIntensityBox;
+
     // Extra Credit:
     QCheckBox *ec1;
     QCheckBox *ec2;
@@ -89,6 +93,10 @@ private slots:
     void onValChangeFocusRangeBox(double newValue);
     void onValChangeMaxBlurRadiusSlider(int newValue);
     void onValChangeMaxBlurRadiusBox(double newValue);
+
+    // Rainforest intensity
+    void onValChangeIQIntensitySlider(int newValue);
+    void onValChangeIQIntensityBox(double newValue);
 
     // Extra Credit:
     void onExtraCredit1();

@@ -271,6 +271,27 @@ void MainWindow::initialize() {
     vLayout2->addWidget(fog);
 	vLayout2->addWidget(toggleScene);
 
+    // Rainforest Intensity
+    QLabel *iqIntensity_label = new QLabel();
+    iqIntensity_label->setText("Rainforest Intensity:");
+    QGroupBox *iqIntensityLayout = new QGroupBox();
+    QHBoxLayout *liq = new QHBoxLayout();
+    iqIntensitySlider = new QSlider(Qt::Orientation::Horizontal);
+    iqIntensitySlider->setTickInterval(1);
+    iqIntensitySlider->setMinimum(0);     // 0.00
+    iqIntensitySlider->setMaximum(100);   // 1.00
+    iqIntensitySlider->setValue(int(settings.rainforestIntensity * 100.f));
+    iqIntensityBox = new QDoubleSpinBox();
+    iqIntensityBox->setMinimum(0.0);
+    iqIntensityBox->setMaximum(1.0);
+    iqIntensityBox->setSingleStep(0.01);
+    iqIntensityBox->setValue(settings.rainforestIntensity);
+    liq->addWidget(iqIntensitySlider);
+    liq->addWidget(iqIntensityBox);
+    iqIntensityLayout->setLayout(liq);
+    vLayout2->addWidget(iqIntensity_label);
+    vLayout2->addWidget(iqIntensityLayout);
+
     // DOF block to second column
     vLayout2->addWidget(dof_label);
     vLayout2->addWidget(ec3);
@@ -302,6 +323,7 @@ void MainWindow::initialize() {
     onValChangeFocusDistBox(settings.focusDist);
     onValChangeFocusRangeBox(settings.focusRange);
     onValChangeMaxBlurRadiusBox(settings.maxBlurRadius);
+    onValChangeIQIntensityBox(settings.rainforestIntensity);
 }
 
 void MainWindow::finish() {
@@ -325,6 +347,10 @@ void MainWindow::connectUIElements() {
     connect(fog, &QCheckBox::toggled, this, &MainWindow::onFogToggled);
     connectExtraCredit();
 	connect(toggleScene, &QPushButton::clicked, this, &MainWindow::onToggleScene);
+    // Rainforest intensity
+    connect(iqIntensitySlider, &QSlider::valueChanged, this, &MainWindow::onValChangeIQIntensitySlider);
+    connect(iqIntensityBox, static_cast<void(QDoubleSpinBox::*)(double)>(&QDoubleSpinBox::valueChanged),
+            this, &MainWindow::onValChangeIQIntensityBox);
 }
 
 
@@ -561,4 +587,16 @@ void MainWindow::onToggleScene() {
 		toggleScene->setText(QStringLiteral("Scene: Rainforest"));
 	}
 	realtime->settingsChanged();
+}
+
+void MainWindow::onValChangeIQIntensitySlider(int newValue) {
+    iqIntensityBox->setValue(newValue / 100.0);
+    settings.rainforestIntensity = iqIntensityBox->value();
+    realtime->settingsChanged();
+}
+
+void MainWindow::onValChangeIQIntensityBox(double newValue) {
+    iqIntensitySlider->setValue(int(newValue * 100.0));
+    settings.rainforestIntensity = iqIntensityBox->value();
+    realtime->settingsChanged();
 }

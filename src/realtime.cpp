@@ -553,6 +553,11 @@ void Realtime::renderFullscreenProcedural(){
                     if (locExposure >= 0) {
                         glUniform1f(locExposure, 1.0f);
                     }
+                    // Rainforest intensity
+                    {
+                        GLint locIntensity = glGetUniformLocation(m_postProgIQ, "u_rainforestIntensity");
+                        if (locIntensity >= 0) glUniform1f(locIntensity, settings.rainforestIntensity);
+                    }
                     glDrawArrays(GL_TRIANGLES, 0, 6);
 
                 // 2) Apply directional blur to screen
@@ -625,6 +630,9 @@ void Realtime::renderFullscreenProcedural(){
                             if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
                             if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
                         }
+                        // Rainforest intensity
+                        GLint locIntensity = glGetUniformLocation(prog, "u_rainforestIntensity");
+                        if (locIntensity >= 0) glUniform1f(locIntensity, settings.rainforestIntensity);
                     } else if (prog == m_postProgWater) {
                         // Upload Water camera (interactive when Water is fullscreen)
                         GLint locCamPosW  = glGetUniformLocation(prog, "u_camPos");
@@ -794,6 +802,11 @@ void Realtime::renderFullscreenProcedural(){
                 if (locExposureA >= 0) {
                     glUniform1f(locExposureA, 1.0f);
                 }
+                // Rainforest intensity
+                {
+                    GLint locIntensityA = glGetUniformLocation(m_postProgIQ, "u_rainforestIntensity");
+                    if (locIntensityA >= 0) glUniform1f(locIntensityA, settings.rainforestIntensity);
+                }
                 glDrawArrays(GL_TRIANGLES, 0, 6);
 
                 // Blur to screen
@@ -856,6 +869,11 @@ void Realtime::renderFullscreenProcedural(){
                 }
                 if (locExposureA >= 0) {
                     glUniform1f(locExposureA, 1.0f);
+                }
+                // Rainforest intensity
+                {
+                    GLint locIntensityA2 = glGetUniformLocation(m_postProgIQ, "u_rainforestIntensity");
+                    if (locIntensityA2 >= 0) glUniform1f(locIntensityA2, settings.rainforestIntensity);
                 }
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }

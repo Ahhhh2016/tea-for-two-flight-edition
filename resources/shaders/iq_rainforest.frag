@@ -20,6 +20,7 @@ uniform vec3 u_camPos;
 uniform vec3 u_camTarget;
 uniform vec3 u_sunDir;
 uniform float u_exposure;
+uniform float u_rainforestIntensity; // 0..1, 0: full grading; 1: stronger gray-blue fog
 
 #define LOWQUALITY
 
@@ -351,8 +352,15 @@ const float kMaxHeight = 840.0;
 
 vec3 fog( in vec3 col, float t )
 {
-    vec3 ext = exp2(-t*0.00025*vec3(1,1.5,4)); 
-    return col*ext + (1.0-ext)*vec3(0.55,0.55,0.58); // 0.55
+    float k = clamp(u_rainforestIntensity, 0.0, 1.0);
+    // Boost fog density with intensity: 0 -> 1x, 1 -> 3x
+    float densityBoost = mix(1.0, 3.0, k);
+    vec3 ext = exp2(-t*0.00025*densityBoost*vec3(1.0,1.5,4.0));
+    // Slightly shift fog color to cooler bluish as intensity increases
+    vec3 fogColBase = vec3(0.55, 0.55, 0.58);
+    vec3 fogColBlue = vec3(0.52, 0.56, 0.66);
+    vec3 fogCol = mix(fogColBase, fogColBlue, k);
+    return col*ext + (1.0-ext)*fogCol;
 }
 
 //------------------------------------------------------------------------------------------
@@ -899,14 +907,14 @@ void mainImage( out vec4 outColor, in vec2 fragCoord )
     float sun = clamp( dot(kSunDir,rd), 0.0, 1.0 );
     col += 0.25*vec3(0.8,0.4,0.2)*pow( sun, 4.0 );
  
-    // gamma
-    col = pow( clamp(col*1.1-0.02,0.0,1.0), vec3(0.4545) );
-    // contrast
-    col = col*col*(3.0-2.0*col);            
-    // color grade    
-    col = pow( col, vec3(1.0,0.92,1.0) );   // soft green
-    col *= vec3(1.02,0.99,0.9 );            // tint red
-    col.z = col.z+0.1;                      // bias blue
+    // Full rainforest grading always on (intensity controls fog only)
+    vec3 colGamma = pow( clamp(col*1.1-0.02,0.0,1.0), vec3(0.4545) );
+    vec3 colGraded = colGamma;
+    colGraded = colGraded*colGraded*(3.0-2.0*colGraded);
+    colGraded = pow( colGraded, vec3(1.0,0.92,1.0) );
+    colGraded *= vec3(1.02,0.99,0.9 );
+    colGraded.z = colGraded.z + 0.1;
+    col = colGraded;
 
     // Exposure control from host
     col *= u_exposure;
