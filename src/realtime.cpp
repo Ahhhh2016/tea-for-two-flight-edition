@@ -33,8 +33,19 @@ Realtime::Realtime(QWidget *parent)
     m_keyMap[Qt::Key_D]       = false;
     m_keyMap[Qt::Key_Alt]     = false;
     m_keyMap[Qt::Key_Space]   = false;
+    m_keyMap[Qt::Key_Shift]   = false;
 
     // If you must use this function, do not edit anything above this
+    // Initialize Water camera with sensible defaults (independent from rainforest camera)
+    {
+        m_cameraWater.setPosition(glm::vec3(0.f, 1.5f, 4.f));
+        m_cameraWater.setLook(glm::normalize(glm::vec3(0.f, 0.f, -1.f)));
+        m_cameraWater.setUp(glm::vec3(0.f, 1.f, 0.f));
+        m_cameraWater.setFovYRadians(glm::radians(60.f));
+        float aspect = size().height() > 0 ? float(size().width()) / float(size().height()) : 1.f;
+        m_cameraWater.setAspectRatio(aspect);
+        m_cameraWater.setClipPlanes(0.1f, 1000.f);
+    }
 }
 
 void Realtime::finish() {
@@ -44,6 +55,7 @@ void Realtime::finish() {
     // Students: anything requiring OpenGL calls when the program exits should be done here
 
     releaseSceneFBO();
+    releaseFullscreenFBO();
     releaseScreenQuad();
     if (m_postProg) {
         glDeleteProgram(m_postProg);
@@ -65,6 +77,10 @@ void Realtime::finish() {
 		glDeleteProgram(m_postProgWater);
 		m_postProgWater = 0;
 	}
+    if (m_postProgDirectional) {
+        glDeleteProgram(m_postProgDirectional);
+        m_postProgDirectional = 0;
+    }
     if (m_portalProg) {
         glDeleteProgram(m_portalProg);
         m_portalProg = 0;
@@ -137,6 +153,9 @@ void Realtime::initializeGL() {
 		// Water fullscreen shader
 		m_postProgWater = ShaderLoader::createShaderProgram(":/resources/shaders/post.vert",
 															":/resources/shaders/water.frag");
+        // Simple directional blur for fullscreen IQ sprint
+        m_postProgDirectional = ShaderLoader::createShaderProgram(":/resources/shaders/post.vert",
+                                                                  ":/resources/shaders/directional_blur.frag");
         // Portal compositing shader
         m_portalProg = ShaderLoader::createShaderProgram(":/resources/shaders/portal.vert",
                                                          ":/resources/shaders/portal.frag");
@@ -153,6 +172,7 @@ void Realtime::initializeGL() {
         if (m_postProgDepth == 0) m_postProgDepth = 0;
 		if (m_postProgIQ == 0) m_postProgIQ = 0;
 		if (m_postProgWater == 0) m_postProgWater = 0;
+        if (m_postProgDirectional == 0) m_postProgDirectional = 0;
         if (m_portalProg == 0) m_portalProg = 0;
         if (m_postProgToon == 0) m_postProgToon = 0;
     }
@@ -204,6 +224,7 @@ void Realtime::initializeGL() {
     createScreenQuad();
     createPortalQuad();
     createOrResizePortalFBO(fbw, fbh);
+    createOrResizeFullscreenFBO(fbw, fbh);
 	// Place portal in world: at y=1.2, z=0 facing +Z (camera starts at z=5 looking -Z)
 	m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, 1.2f, 0.f));
     // Lift camera slightly at start to avoid Water-in-portal artifacts when too low
@@ -213,6 +234,18 @@ void Realtime::initializeGL() {
         glm::vec3 p = m_camera.getPosition();
         p += glm::vec3(0.f, moveSpeed * assumedDt, 0.f);
         m_camera.setPosition(p);
+    }
+    // If starting in IQ fullscreen mode (no scenefile), place camera farther back like IQ's original vantage
+    if (settings.sceneFilePath.empty() && settings.fullscreenScene == FullscreenScene::IQ) {
+        const glm::vec3 ro(0.f, 401.5f, 6.f);
+        const glm::vec3 ta(0.f, 403.5f, -84.0f); // -90 + ro.z
+        const glm::vec3 look = glm::normalize(ta - ro);
+        m_camera.setPosition(ro);
+        m_camera.setLook(look);
+        m_camera.setUp(glm::vec3(0.f, 1.f, 0.f));
+        // Keep portal centered at the camera's height so it's visible in front
+        // Facing +Z, located at z=0 like before
+        m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, ro.y, 0.f));
     }
 
     // Initialize previous camera matrices
@@ -268,47 +301,166 @@ void Realtime::renderFullscreenProcedural(){
                 prog = m_postProgWater;
             }
             if (prog != 0) {
-                if (prevFBO == 0) {
+                // Compute speed-based blur activation and strength (persists while speed decays)
+                float maxSpeedUI = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
+                float speedFracUI = 0.0f;
+                if (maxSpeedUI > m_moveSpeedBase) {
+                    speedFracUI = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeedUI - m_moveSpeedBase), 1.0f));
+                }
+                // Delayed ramp: 0 for first 2s; ramp 0..1 over 2..4s while holding.
+                // After unlock and on release, use full scale (1.0) with speed-decay persistence.
+                bool shiftDownUI = m_keyMap[Qt::Key_Shift];
+                float blurScaleUI = shiftDownUI ? m_shiftHoldRamp01 : (m_sprintBlurUnlocked ? 1.0f : 0.0f);
+                float blurPixelsUI = 10.0f * speedFracUI * blurScaleUI; // 0..10px scaled by ramp/permit
+                int numSamplesUI = 7 + int(10.0f * speedFracUI * blurScaleUI); // 7..17, ensure odd below
+                if ((numSamplesUI % 2) == 0) numSamplesUI += 1;
+                bool blurActiveIQ = (settings.fullscreenScene == FullscreenScene::IQ) &&
+                                    (blurPixelsUI > 0.0f) &&
+                                    m_postProgDirectional && m_fullscreenFBO && m_fullscreenColorTex;
+                if (blurActiveIQ) {
+                    // 1) Render IQ to fullscreen offscreen texture
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_fullscreenFBO);
                     glViewport(0, 0, outW, outH);
+                    const float clearC[4] = {0.f, 0.f, 0.f, 1.f};
+                    glClearBufferfv(GL_COLOR, 0, clearC);
+                    glDisable(GL_DEPTH_TEST);
+                    glUseProgram(m_postProgIQ);
+                    glBindVertexArray(m_screenVAO);
+                    GLint locRes  = glGetUniformLocation(m_postProgIQ, "iResolution");
+                    GLint locTime = glGetUniformLocation(m_postProgIQ, "iTime");
+                    GLint locFrame = glGetUniformLocation(m_postProgIQ, "iFrame");
+                    if (locRes  >= 0) glUniform3f(locRes,  float(outW), float(outH), 1.0f);
+                    if (locTime >= 0) glUniform1f(locTime, m_timeSec);
+                    if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
+                    // IQ camera/light uniforms
+                    GLint locCamPos  = glGetUniformLocation(m_postProgIQ, "u_camPos");
+                    GLint locCamLook = glGetUniformLocation(m_postProgIQ, "u_camLook");
+                    GLint locCamUp   = glGetUniformLocation(m_postProgIQ, "u_camUp");
+                    GLint locFovY    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
+                    GLint locCamTarget = glGetUniformLocation(m_postProgIQ, "u_camTarget");
+                    if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0 || locCamTarget >= 0) {
+                        glm::vec3 camPos  = m_camera.getPosition();
+                        glm::vec3 camLook = m_camera.getLook();
+                        glm::vec3 camUp   = m_camera.getUp();
+                        float fovY        = 2.f * std::atan(1.f / 1.5f);
+                        glm::vec3 camTarget = camPos + glm::normalize(camLook);
+                        if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
+                        if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
+                        if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
+                        if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
+                        if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
+                    }
+                    GLint locSunDir = glGetUniformLocation(m_postProgIQ, "u_sunDir");
+                    GLint locExposure = glGetUniformLocation(m_postProgIQ, "u_exposure");
+                    if (locSunDir >= 0) {
+                        const glm::vec3 sunDir(-0.624695f, 0.468521f, -0.624695f);
+                        glUniform3f(locSunDir, sunDir.x, sunDir.y, sunDir.z);
+                    }
+                    if (locExposure >= 0) {
+                        glUniform1f(locExposure, 1.0f);
+                    }
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                // 2) Apply directional blur to screen
+                    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+                    if (prevFBO == 0) {
+                        glViewport(0, 0, outW, outH);
+                    }
+                    glDisable(GL_DEPTH_TEST);
+                    glUseProgram(m_postProgDirectional);
+                    glBindVertexArray(m_screenVAO);
+                    GLint locColor = glGetUniformLocation(m_postProgDirectional, "u_colorTex");
+                    GLint locTexel = glGetUniformLocation(m_postProgDirectional, "u_texelSize");
+                    GLint locDir   = glGetUniformLocation(m_postProgDirectional, "u_directionUV");
+                    GLint locPx    = glGetUniformLocation(m_postProgDirectional, "u_blurPixels");
+                    GLint locNS    = glGetUniformLocation(m_postProgDirectional, "u_numSamples");
+                    if (locColor >= 0) glUniform1i(locColor, 0);
+                    if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(outW), 1.0f / float(outH));
+                // Use a simple horizontal blur direction
+                if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
+                    if (locPx  >= 0) glUniform1f(locPx, blurPixelsUI);
+                    if (locNS  >= 0) glUniform1i(locNS, numSamplesUI);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                    m_frameCount++;
+                    return;
+                } else {
+                    if (prevFBO == 0) {
+                        glViewport(0, 0, outW, outH);
+                    }
+                    glDisable(GL_DEPTH_TEST);
+                    glUseProgram(prog);
+                    glBindVertexArray(m_screenVAO);
+                    // Common uniforms
+                    GLint locRes  = glGetUniformLocation(prog, "iResolution");
+                    GLint locTime = glGetUniformLocation(prog, "iTime");
+                    if (locRes  >= 0) glUniform3f(locRes,  float(outW), float(outH), 1.0f);
+                    if (locTime >= 0) glUniform1f(locTime, m_timeSec);
+                    // iFrame (IQ only)
+                    GLint locFrame = glGetUniformLocation(prog, "iFrame");
+                    if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
+                    // iMouse (water uses; safe if unused)
+                    GLint locMouse = glGetUniformLocation(prog, "iMouse");
+                    if (locMouse >= 0) {
+                        float mouseX = m_prev_mouse_pos.x * float(m_devicePixelRatio);
+                        float mouseY = (size().height() - m_prev_mouse_pos.y) * float(m_devicePixelRatio);
+                        float clickX = m_mouseDown ? mouseX : 0.f;
+                        float clickY = m_mouseDown ? mouseY : 0.f;
+                        glUniform4f(locMouse, mouseX, mouseY, clickX, clickY);
+                    }
+                    // Camera uniforms: apply only for IQ shader
+                    GLint locSunDir = glGetUniformLocation(prog, "u_sunDir");
+                    GLint locExposure = glGetUniformLocation(prog, "u_exposure");
+                    if (prog == m_postProgIQ) {
+                        GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
+                        GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
+                        GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
+                        GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
+                        GLint locCamTarget = glGetUniformLocation(prog, "u_camTarget");
+                        if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0 || locCamTarget >= 0) {
+                            glm::vec3 camPos  = m_camera.getPosition();
+                            glm::vec3 camLook = m_camera.getLook();
+                            glm::vec3 camUp   = m_camera.getUp();
+                            float fovY        = 2.f * std::atan(1.f / 1.5f);
+                            glm::vec3 camTarget = camPos + glm::normalize(camLook);
+                            if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
+                            if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
+                            if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
+                            if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
+                            if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
+                        }
+                    } else if (prog == m_postProgWater) {
+                        // Upload Water camera (interactive when Water is fullscreen)
+                        GLint locCamPosW  = glGetUniformLocation(prog, "u_camPos");
+                        GLint locCamLookW = glGetUniformLocation(prog, "u_camLook");
+                        GLint locCamUpW   = glGetUniformLocation(prog, "u_camUp");
+                        GLint locFovYW    = glGetUniformLocation(prog, "u_camFovY");
+                        if (locCamPosW >= 0 || locCamLookW >= 0 || locCamUpW >= 0 || locFovYW >= 0) {
+                            const glm::vec3 camPosW  = m_cameraWater.getPosition();
+                            const glm::vec3 camLookW = glm::normalize(m_cameraWater.getLook());
+                            const glm::vec3 camUpW   = glm::normalize(m_cameraWater.getUp());
+                            const float fovYW        = m_cameraWater.getFovYRadians();
+                            if (locCamPosW  >= 0) glUniform3f(locCamPosW,  camPosW.x,  camPosW.y,  camPosW.z);
+                            if (locCamLookW >= 0) glUniform3f(locCamLookW, camLookW.x, camLookW.y, camLookW.z);
+                            if (locCamUpW   >= 0) glUniform3f(locCamUpW,   camUpW.x,   camUpW.y,   camUpW.z);
+                            if (locFovYW    >= 0) glUniform1f(locFovYW,    fovYW);
+                        }
+                    }
+                    if (locSunDir >= 0) {
+                        // Original IQ rainforest sun direction
+                        const glm::vec3 sunDir(-0.624695f, 0.468521f, -0.624695f);
+                        glUniform3f(locSunDir, sunDir.x, sunDir.y, sunDir.z);
+                    }
+                    if (locExposure >= 0) {
+                        // Match original brightness; let shader handle grading and gamma
+                        glUniform1f(locExposure, 1.0f);
+                    }
+                    glDrawArrays(GL_TRIANGLES, 0, 6);
+                    m_frameCount++;
+                    return;
                 }
-                glDisable(GL_DEPTH_TEST);
-                glUseProgram(prog);
-                glBindVertexArray(m_screenVAO);
-                // Common uniforms
-                GLint locRes  = glGetUniformLocation(prog, "iResolution");
-                GLint locTime = glGetUniformLocation(prog, "iTime");
-                if (locRes  >= 0) glUniform3f(locRes,  float(outW), float(outH), 1.0f);
-                if (locTime >= 0) glUniform1f(locTime, m_timeSec);
-                // iFrame (IQ only)
-                GLint locFrame = glGetUniformLocation(prog, "iFrame");
-                if (locFrame >= 0) glUniform1i(locFrame, m_frameCount);
-                // iMouse (water uses; safe if unused)
-                GLint locMouse = glGetUniformLocation(prog, "iMouse");
-                if (locMouse >= 0) {
-                    float mouseX = m_prev_mouse_pos.x * float(m_devicePixelRatio);
-                    float mouseY = (size().height() - m_prev_mouse_pos.y) * float(m_devicePixelRatio);
-                    float clickX = m_mouseDown ? mouseX : 0.f;
-                    float clickY = m_mouseDown ? mouseY : 0.f;
-                    glUniform4f(locMouse, mouseX, mouseY, clickX, clickY);
-                }
-                // Camera uniforms for IQ shader (safe if missing)
-                GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
-                GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
-                GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
-                GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
-                if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0) {
-                    glm::vec3 camPos  = m_camera.getPosition();
-                    glm::vec3 camLook = m_camera.getLook();
-                    glm::vec3 camUp   = m_camera.getUp();
-                    float fovY        = m_camera.getFovYRadians();
-                    if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
-                    if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
-                    if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
-                    if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
-                }
-                glDrawArrays(GL_TRIANGLES, 0, 6);
-                m_frameCount++;
-                return;
             }
         } else {
             // 1) Render Scene B (Water) into portal FBO
@@ -331,52 +483,146 @@ void Realtime::renderFullscreenProcedural(){
                 float clickY = m_mouseDown ? mouseY : 0.f;
                 glUniform4f(locMouseB, mouseX, mouseY, clickX, clickY);
             }
-            // Camera uniforms for Water shader (to mirror rainforest controls)
-            GLint locCamPosB  = glGetUniformLocation(m_postProgWater, "u_camPos");
-            GLint locCamLookB = glGetUniformLocation(m_postProgWater, "u_camLook");
-            GLint locCamUpB   = glGetUniformLocation(m_postProgWater, "u_camUp");
-            GLint locFovYB    = glGetUniformLocation(m_postProgWater, "u_camFovY");
-            if (locCamPosB >= 0 || locCamLookB >= 0 || locCamUpB >= 0 || locFovYB >= 0) {
-                glm::vec3 camPos  = m_camera.getPosition();
-                glm::vec3 camLook = m_camera.getLook();
-                glm::vec3 camUp   = m_camera.getUp();
-                float fovY        = m_camera.getFovYRadians();
-                if (locCamPosB  >= 0) glUniform3f(locCamPosB,  camPos.x,  camPos.y,  camPos.z);
-                if (locCamLookB >= 0) glUniform3f(locCamLookB, camLook.x, camLook.y, camLook.z);
-                if (locCamUpB   >= 0) glUniform3f(locCamUpB,   camUp.x,   camUp.y,   camUp.z);
-                if (locFovYB    >= 0) glUniform1f(locFovYB,    fovY);
+
+			// Water camera for portal rendering (uses m_cameraWater)
+            {
+                GLint locCamPosW  = glGetUniformLocation(m_postProgWater, "u_camPos");
+                GLint locCamLookW = glGetUniformLocation(m_postProgWater, "u_camLook");
+                GLint locCamUpW   = glGetUniformLocation(m_postProgWater, "u_camUp");
+                GLint locFovYW    = glGetUniformLocation(m_postProgWater, "u_camFovY");
+                if (locCamPosW >= 0 || locCamLookW >= 0 || locCamUpW >= 0 || locFovYW >= 0) {
+                    const glm::vec3 camPosW  = m_cameraWater.getPosition();
+                    const glm::vec3 camLookW = glm::normalize(m_cameraWater.getLook());
+                    const glm::vec3 camUpW   = glm::normalize(m_cameraWater.getUp());
+                    const float fovYW        = m_cameraWater.getFovYRadians();
+                    if (locCamPosW  >= 0) glUniform3f(locCamPosW,  camPosW.x,  camPosW.y,  camPosW.z);
+                    if (locCamLookW >= 0) glUniform3f(locCamLookW, camLookW.x, camLookW.y, camLookW.z);
+                    if (locCamUpW   >= 0) glUniform3f(locCamUpW,   camUpW.x,   camUpW.y,   camUpW.z);
+                    if (locFovYW    >= 0) glUniform1f(locFovYW,    fovYW);
+                }
             }
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
-            // 2) Render Scene A (IQ rainforest) to screen
-            glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
-            if (prevFBO == 0) {
+            // 2) Render Scene A (IQ rainforest) then optional sprint blur to screen
+            // Compute speed-based blur activation and strength
+            float maxSpeedPB = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
+            float speedFracPB = 0.0f;
+            if (maxSpeedPB > m_moveSpeedBase) {
+                speedFracPB = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeedPB - m_moveSpeedBase), 1.0f));
+            }
+            bool shiftDownPB = m_keyMap[Qt::Key_Shift];
+            float blurScalePB = shiftDownPB ? m_shiftHoldRamp01 : (m_sprintBlurUnlocked ? 1.0f : 0.0f);
+            float blurPixelsPB = 10.0f * speedFracPB * blurScalePB; // 0..10px, scaled by ramp/permit
+            int numSamplesPB = 7 + int(10.0f * speedFracPB * blurScalePB); // 7..17
+            if ((numSamplesPB % 2) == 0) numSamplesPB += 1;
+            bool blurActiveIQPortal = (blurPixelsPB > 0.0f) &&
+                                      m_postProgDirectional && m_fullscreenFBO && m_fullscreenColorTex;
+            if (blurActiveIQPortal) {
+                // Render IQ to offscreen
+                glBindFramebuffer(GL_FRAMEBUFFER, m_fullscreenFBO);
                 glViewport(0, 0, outW, outH);
+                const float clearC2[4] = {0.f, 0.f, 0.f, 1.f};
+                glClearBufferfv(GL_COLOR, 0, clearC2);
+                glDisable(GL_DEPTH_TEST);
+                glUseProgram(m_postProgIQ);
+                glBindVertexArray(m_screenVAO);
+                GLint locResA  = glGetUniformLocation(m_postProgIQ, "iResolution");
+                GLint locTimeA = glGetUniformLocation(m_postProgIQ, "iTime");
+                GLint locFrameA = glGetUniformLocation(m_postProgIQ, "iFrame");
+                if (locResA  >= 0) glUniform3f(locResA,  float(outW), float(outH), 1.0f);
+                if (locTimeA >= 0) glUniform1f(locTimeA, m_timeSec);
+                if (locFrameA >= 0) glUniform1i(locFrameA, m_frameCount);
+                GLint locCamPosA  = glGetUniformLocation(m_postProgIQ, "u_camPos");
+                GLint locCamLookA = glGetUniformLocation(m_postProgIQ, "u_camLook");
+                GLint locCamUpA   = glGetUniformLocation(m_postProgIQ, "u_camUp");
+                GLint locFovYA    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
+                GLint locCamTargetA = glGetUniformLocation(m_postProgIQ, "u_camTarget");
+                GLint locSunDirA  = glGetUniformLocation(m_postProgIQ, "u_sunDir");
+                GLint locExposureA = glGetUniformLocation(m_postProgIQ, "u_exposure");
+                if (locCamPosA >= 0 || locCamLookA >= 0 || locCamUpA >= 0 || locFovYA >= 0 || locCamTargetA >= 0) {
+                    glm::vec3 camPos  = m_camera.getPosition();
+                    glm::vec3 camLook = m_camera.getLook();
+                    glm::vec3 camUp   = m_camera.getUp();
+                    float fovY        = 2.f * std::atan(1.f / 1.5f);
+                    glm::vec3 camTarget = camPos + glm::normalize(camLook);
+                    if (locCamPosA  >= 0) glUniform3f(locCamPosA,  camPos.x,  camPos.y,  camPos.z);
+                    if (locCamLookA >= 0) glUniform3f(locCamLookA, camLook.x, camLook.y, camLook.z);
+                    if (locCamUpA   >= 0) glUniform3f(locCamUpA,   camUp.x,   camUp.y,   camUp.z);
+                    if (locFovYA    >= 0) glUniform1f(locFovYA,    fovY);
+                    if (locCamTargetA >= 0) glUniform3f(locCamTargetA, camTarget.x, camTarget.y, camTarget.z);
+                }
+                if (locSunDirA >= 0) {
+                    const glm::vec3 sunDir(-0.624695f, 0.468521f, -0.624695f);
+                    glUniform3f(locSunDirA, sunDir.x, sunDir.y, sunDir.z);
+                }
+                if (locExposureA >= 0) {
+                    glUniform1f(locExposureA, 1.0f);
+                }
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+
+                // Blur to screen
+                glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+                if (prevFBO == 0) {
+                    glViewport(0, 0, outW, outH);
+                }
+                glDisable(GL_DEPTH_TEST);
+                glUseProgram(m_postProgDirectional);
+                glBindVertexArray(m_screenVAO);
+                GLint locColor = glGetUniformLocation(m_postProgDirectional, "u_colorTex");
+                GLint locTexel = glGetUniformLocation(m_postProgDirectional, "u_texelSize");
+                GLint locDir   = glGetUniformLocation(m_postProgDirectional, "u_directionUV");
+                GLint locPx    = glGetUniformLocation(m_postProgDirectional, "u_blurPixels");
+                GLint locNS    = glGetUniformLocation(m_postProgDirectional, "u_numSamples");
+                if (locColor >= 0) glUniform1i(locColor, 0);
+                if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(outW), 1.0f / float(outH));
+                if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
+                if (locPx  >= 0) glUniform1f(locPx, blurPixelsPB);
+                if (locNS  >= 0) glUniform1i(locNS, numSamplesPB);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            } else {
+                glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+                if (prevFBO == 0) {
+                    glViewport(0, 0, outW, outH);
+                }
+                glDisable(GL_DEPTH_TEST);
+                glUseProgram(m_postProgIQ);
+                glBindVertexArray(m_screenVAO);
+                GLint locResA  = glGetUniformLocation(m_postProgIQ, "iResolution");
+                GLint locTimeA = glGetUniformLocation(m_postProgIQ, "iTime");
+                GLint locFrameA = glGetUniformLocation(m_postProgIQ, "iFrame");
+                if (locResA  >= 0) glUniform3f(locResA,  float(outW), float(outH), 1.0f);
+                if (locTimeA >= 0) glUniform1f(locTimeA, m_timeSec);
+                if (locFrameA >= 0) glUniform1i(locFrameA, m_frameCount);
+                GLint locCamPosA  = glGetUniformLocation(m_postProgIQ, "u_camPos");
+                GLint locCamLookA = glGetUniformLocation(m_postProgIQ, "u_camLook");
+                GLint locCamUpA   = glGetUniformLocation(m_postProgIQ, "u_camUp");
+                GLint locFovYA    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
+                GLint locCamTargetA = glGetUniformLocation(m_postProgIQ, "u_camTarget");
+                GLint locSunDirA  = glGetUniformLocation(m_postProgIQ, "u_sunDir");
+                GLint locExposureA = glGetUniformLocation(m_postProgIQ, "u_exposure");
+                if (locCamPosA >= 0 || locCamLookA >= 0 || locCamUpA >= 0 || locFovYA >= 0 || locCamTargetA >= 0) {
+                    glm::vec3 camPos  = m_camera.getPosition();
+                    glm::vec3 camLook = m_camera.getLook();
+                    glm::vec3 camUp   = m_camera.getUp();
+                    float fovY        = 2.f * std::atan(1.f / 1.5f);
+                    glm::vec3 camTarget = camPos + glm::normalize(camLook);
+                    if (locCamPosA  >= 0) glUniform3f(locCamPosA,  camPos.x,  camPos.y,  camPos.z);
+                    if (locCamLookA >= 0) glUniform3f(locCamLookA, camLook.x, camLook.y, camLook.z);
+                    if (locCamUpA   >= 0) glUniform3f(locCamUpA,   camUp.x,   camUp.y,   camUp.z);
+                    if (locFovYA    >= 0) glUniform1f(locFovYA,    fovY);
+                    if (locCamTargetA >= 0) glUniform3f(locCamTargetA, camTarget.x, camTarget.y, camTarget.z);
+                }
+                if (locSunDirA >= 0) {
+                    const glm::vec3 sunDir(-0.624695f, 0.468521f, -0.624695f);
+                    glUniform3f(locSunDirA, sunDir.x, sunDir.y, sunDir.z);
+                }
+                if (locExposureA >= 0) {
+                    glUniform1f(locExposureA, 1.0f);
+                }
+                glDrawArrays(GL_TRIANGLES, 0, 6);
             }
-            glDisable(GL_DEPTH_TEST);
-            glUseProgram(m_postProgIQ);
-            glBindVertexArray(m_screenVAO);
-            GLint locResA  = glGetUniformLocation(m_postProgIQ, "iResolution");
-            GLint locTimeA = glGetUniformLocation(m_postProgIQ, "iTime");
-            GLint locFrameA = glGetUniformLocation(m_postProgIQ, "iFrame");
-            if (locResA  >= 0) glUniform3f(locResA,  float(outW), float(outH), 1.0f);
-            if (locTimeA >= 0) glUniform1f(locTimeA, m_timeSec);
-            if (locFrameA >= 0) glUniform1i(locFrameA, m_frameCount);
-            GLint locCamPosA  = glGetUniformLocation(m_postProgIQ, "u_camPos");
-            GLint locCamLookA = glGetUniformLocation(m_postProgIQ, "u_camLook");
-            GLint locCamUpA   = glGetUniformLocation(m_postProgIQ, "u_camUp");
-            GLint locFovYA    = glGetUniformLocation(m_postProgIQ, "u_camFovY");
-            if (locCamPosA >= 0 || locCamLookA >= 0 || locCamUpA >= 0 || locFovYA >= 0) {
-                glm::vec3 camPos  = m_camera.getPosition();
-                glm::vec3 camLook = m_camera.getLook();
-                glm::vec3 camUp   = m_camera.getUp();
-                float fovY        = m_camera.getFovYRadians();
-                if (locCamPosA  >= 0) glUniform3f(locCamPosA,  camPos.x,  camPos.y,  camPos.z);
-                if (locCamLookA >= 0) glUniform3f(locCamLookA, camLook.x, camLook.y, camLook.z);
-                if (locCamUpA   >= 0) glUniform3f(locCamUpA,   camUp.x,   camUp.y,   camUp.z);
-                if (locFovYA    >= 0) glUniform1f(locFovYA,    fovY);
-            }
-            glDrawArrays(GL_TRIANGLES, 0, 6);
             m_frameCount++;
 
             // 3) Composite portal quad
@@ -542,7 +788,9 @@ void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
     // Fog setup
     float nearZ = settings.nearPlane;
     float farZ = settings.farPlane;
-    glm::vec3 fogColor(0.85f, 0.9f, 1.0f);
+
+    glm::vec3 fogColor(1.f, 0.5f, 1.0f); // blue-white fog color
+
     float target = 0.02f;
     float density = (farZ > nearZ)
                         ? (std::sqrt(std::max(0.0f, -std::log(target))) / farZ)
@@ -643,6 +891,9 @@ void Realtime::renderGeometryScene() {
 
     bool useMotion = settings.extraCredit4 && !m_debugDepth;
 
+    // Select post program
+    // bool useMotion = !m_debugDepth && (settings.extraCredit4 || m_sprintBlurUnlocked);
+
     if (m_debugDepth && m_postProgDepth) {
         glUseProgram(m_postProgDepth);
     } else if (useMotion && m_postProgMotion) {
@@ -720,11 +971,13 @@ void Realtime::resizeGL(int w, int h) {
     // Students: anything requiring OpenGL calls when the program starts should be done here
 	float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
 	m_camera.setAspectRatio(aspect);
+    m_cameraWater.setAspectRatio(aspect);
 
     int fbw = size().width() * m_devicePixelRatio;
     int fbh = size().height() * m_devicePixelRatio;
     createOrResizeSceneFBO(fbw, fbh);
     createOrResizePortalFBO(fbw, fbh);
+    createOrResizeFullscreenFBO(fbw, fbh);
 }
 
 void Realtime::sceneChanged(bool preserveCamera) {
@@ -741,6 +994,9 @@ void Realtime::sceneChanged(bool preserveCamera) {
         float aspect = float(size().width() * m_devicePixelRatio) /
                        float(size().height() * m_devicePixelRatio);
         m_camera.setAspectRatio(aspect);
+        // Keep Water camera clip/aspect in sync
+        m_cameraWater.setClipPlanes(settings.nearPlane, settings.farPlane);
+        m_cameraWater.setAspectRatio(aspect);
 
         update();
         return;
@@ -764,6 +1020,8 @@ void Realtime::sceneChanged(bool preserveCamera) {
         m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
         float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
         m_camera.setAspectRatio(aspect);
+        m_cameraWater.setClipPlanes(settings.nearPlane, settings.farPlane);
+        m_cameraWater.setAspectRatio(aspect);
 
         rebuildGeometryFromRenderData();
     }
@@ -1092,6 +1350,8 @@ void Realtime::settingsChanged() {
 		m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
 		float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
 		m_camera.setAspectRatio(aspect);
+        m_cameraWater.setClipPlanes(settings.nearPlane, settings.farPlane);
+        m_cameraWater.setAspectRatio(aspect);
 		sceneChanged();
 		return;
     }
@@ -1107,9 +1367,42 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
         update();
         return;
     }
-    // Toggle portal on 'O'
+	// Place/enable portal on 'O' at camera's 2 o'clock, rotate 70 deg around Y
     if (event->key() == Qt::Key_O) {
-        m_portalEnabled = !m_portalEnabled;
+		m_portalEnabled = true;
+		m_portalAutoCenterY = false; // lock placement; do not auto-follow Y afterward
+
+		// Use active camera depending on current fullscreen scene
+		const bool waterActive = (settings.fullscreenScene == FullscreenScene::Water);
+		const glm::vec3 camPos = waterActive ? m_cameraWater.getPosition() : m_camera.getPosition();
+		const glm::vec3 camLook = glm::normalize(waterActive ? m_cameraWater.getLook() : m_camera.getLook());
+
+		// Compute horizontal forward and right (XZ plane)
+		glm::vec3 forwardXZ = glm::vec3(camLook.x, 0.f, camLook.z);
+		if (glm::length(forwardXZ) < 1e-4f) {
+			forwardXZ = glm::vec3(0.f, 0.f, -1.f);
+		} else {
+			forwardXZ = glm::normalize(forwardXZ);
+		}
+		glm::vec3 rightXZ = glm::normalize(glm::cross(forwardXZ, glm::vec3(0.f, 1.f, 0.f)));
+
+		// 2 o'clock direction = 30 degrees to the right from forward (on XZ plane)
+		const float angle30 = glm::radians(30.f);
+		const float c30 = std::cos(angle30);
+		const float s30 = std::sin(angle30);
+		glm::vec3 dir2oclock = glm::normalize(c30 * forwardXZ + s30 * rightXZ);
+
+		// Place some units away from the camera, at same Y as camera
+		const float placeDist = 3.0f;
+		const glm::vec3 portalPos = camPos + dir2oclock * placeDist;
+
+		// Build model: translate to position, then yaw by +70 degrees around world Y
+		const float yawDeg = 70.f;
+		glm::mat4 M(1.f);
+		M = glm::translate(M, glm::vec3(portalPos.x, camPos.y, portalPos.z));
+		M = glm::rotate(M, glm::radians(yawDeg), glm::vec3(0.f, 1.f, 0.f));
+		m_portalModel = M;
+
         update();
         return;
     }
@@ -1166,8 +1459,12 @@ void Realtime::mouseMoveEvent(QMouseEvent *event) {
         float yaw   = -static_cast<float>(deltaX) * sensitivity; // rotate around world up
         float pitch = -static_cast<float>(deltaY) * sensitivity; // rotate around camera right (perpendicular to look and up)
 
-        glm::vec3 look = m_camera.getLook();
-        glm::vec3 up   = m_camera.getUp();
+        // Route input to Water camera when Water is the fullscreen scene (no scenefile)
+        bool routeToWater = settings.sceneFilePath.empty() && (settings.fullscreenScene == FullscreenScene::Water);
+        Camera &cam = routeToWater ? m_cameraWater : m_camera;
+
+        glm::vec3 look = cam.getLook();
+        glm::vec3 up   = cam.getUp();
         const glm::vec3 worldUp(0.f, 1.f, 0.f);
 
         if (yaw != 0.f) {
@@ -1198,8 +1495,8 @@ void Realtime::mouseMoveEvent(QMouseEvent *event) {
         glm::vec3 right = glm::normalize(glm::cross(look, up));
         up = glm::normalize(glm::cross(right, look));
 
-        m_camera.setLook(look);
-        m_camera.setUp(up);
+        cam.setLook(look);
+        cam.setUp(up);
 
         update(); // asks for a PaintGL() call to occur
     }
@@ -1213,11 +1510,41 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Use deltaTime and m_keyMap here to move around
     // Accumulate time for shaders needing iTime
     m_timeSec += deltaTime;
-    const float moveSpeed = 3.0f; // world-space units per second
+
+	// Track Shift hold for gating motion blur
+	if (m_keyMap[Qt::Key_Shift]) {
+		m_shiftHoldSec += deltaTime;
+		if (!m_sprintBlurUnlocked && m_shiftHoldSec >= 2.0f) {
+			m_sprintBlurUnlocked = true;
+		}
+	} else {
+		m_shiftHoldSec = 0.0f;
+	}
+	// Delayed ramp: 0 for first 2 seconds, then ramp 0..1 over next 2 seconds while holding
+	float shiftHeldBeyond2 = m_shiftHoldSec - 2.0f;
+	m_shiftHoldRamp01 = std::max(0.0f, std::min(shiftHeldBeyond2 / 2.0f, 1.0f));
+    const float baseSpeed = m_moveSpeedBase; // world-space units per second
+    // Sprint accumulation
+    if (m_keyMap[Qt::Key_Shift]) {
+        m_sprintAccum += m_sprintAccelPerSec * deltaTime;
+    } else {
+        m_sprintAccum -= m_sprintDecayPerSec * deltaTime;
+    }
+    m_sprintAccum = std::max(0.0f, std::min(m_sprintAccum, m_sprintAccumMax));
+    const float currentSpeed = baseSpeed * (1.0f + m_sprintAccum);
+    m_currentSpeedUnits = currentSpeed;
+	// Reset blur unlock once back to base speed (stops persistent blur until next 2s hold)
+	if (m_sprintBlurUnlocked && m_currentSpeedUnits <= (m_moveSpeedBase + 0.01f)) {
+		m_sprintBlurUnlocked = false;
+	}
     glm::vec3 displacement(0.f);
 
-    const glm::vec3 lookDir = glm::normalize(m_camera.getLook());
-    const glm::vec3 upDir   = glm::normalize(m_camera.getUp());
+    // Route movement to Water camera when Water is the fullscreen scene (no scenefile)
+    bool routeToWater = settings.sceneFilePath.empty() && (settings.fullscreenScene == FullscreenScene::Water);
+    Camera &cam = routeToWater ? m_cameraWater : m_camera;
+
+    const glm::vec3 lookDir = glm::normalize(cam.getLook());
+    const glm::vec3 upDir   = glm::normalize(cam.getUp());
     const glm::vec3 rightDir = glm::normalize(glm::cross(lookDir, upDir)); // right, perpendicular to look and up
     const glm::vec3 worldUp(0.f, 1.f, 0.f);
 
@@ -1242,8 +1569,8 @@ void Realtime::timerEvent(QTimerEvent *event) {
     }
 
     if (glm::length(displacement) > 0.f) {
-        displacement = glm::normalize(displacement) * (moveSpeed * deltaTime);
-        m_camera.setPosition(m_camera.getPosition() + displacement);
+        displacement = glm::normalize(displacement) * (currentSpeed * deltaTime);
+        cam.setPosition(cam.getPosition() + displacement);
     }
 
 	// Portal traversal via keyboard:
@@ -1256,12 +1583,22 @@ void Realtime::timerEvent(QTimerEvent *event) {
 			m_portalCooldownTimer = std::max(0.f, m_portalCooldownTimer - deltaTime);
 		}
 		const bool cooldownReady = (m_portalCooldownTimer <= 0.f);
+ 
+		// Keep the portal centered at the active camera's height so the ray test
+		// can hit the portal rectangle from either side (IQ or Water)
+		if (settings.sceneFilePath.empty() && m_portalEnabled && m_portalAutoCenterY) {
+			const bool waterActiveNow = (settings.fullscreenScene == FullscreenScene::Water);
+			const float camY = waterActiveNow ? m_cameraWater.getPosition().y : m_camera.getPosition().y;
+			m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, camY, 0.f));
+		}
 
 		// Ray-portal intersection test in world space using camera forward ray
 		bool insidePortalRect = false;
-		{
-			const glm::vec3 camPos = m_camera.getPosition();
-			const glm::vec3 rayDir = glm::normalize(m_camera.getLook());
+        {
+            // Use the active scene's camera for portal picking
+            const bool waterActive = (settings.fullscreenScene == FullscreenScene::Water);
+            const glm::vec3 camPos = waterActive ? m_cameraWater.getPosition() : m_camera.getPosition();
+            const glm::vec3 rayDir = glm::normalize(waterActive ? m_cameraWater.getLook() : m_camera.getLook());
 			const glm::vec3 center = glm::vec3(m_portalModel * glm::vec4(0.f, 0.f, 0.f, 1.f));
 			const glm::vec3 axisX  = glm::vec3(m_portalModel * glm::vec4(1.f, 0.f, 0.f, 0.f));
 			const glm::vec3 axisY  = glm::vec3(m_portalModel * glm::vec4(0.f, 1.f, 0.f, 0.f));
@@ -1292,7 +1629,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 		if (portalRenderable &&
 			settings.fullscreenScene == FullscreenScene::IQ) {
 			if (insidePortalRect && m_keyMap[Qt::Key_W] && cooldownReady) {
-				m_portalDepth -= moveSpeed * deltaTime;
+				m_portalDepth -= currentSpeed * deltaTime;
 				if (m_portalDepth <= 0.f) {
 					settings.fullscreenScene = FullscreenScene::Water;
                     glm::vec3 p = m_camera.getPosition();
@@ -1303,14 +1640,14 @@ void Realtime::timerEvent(QTimerEvent *event) {
 				}
 			} else {
 				// recover when not actively pushing through
-				m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + moveSpeed * 0.75f * deltaTime);
+                m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + baseSpeed * 0.75f * deltaTime);
 			}
 		}
 		// Walk "back" from Water to IQ (use same rect and S key)
 		else if (settings.sceneFilePath.empty() &&
 				 settings.fullscreenScene == FullscreenScene::Water) {
 			if (insidePortalRect && m_keyMap[Qt::Key_S] && cooldownReady) {
-				m_portalDepth -= moveSpeed * deltaTime;
+				m_portalDepth -= currentSpeed * deltaTime;
 				if (m_portalDepth <= 0.f) {
 					settings.fullscreenScene = FullscreenScene::IQ;
 					m_portalDepth = m_portalDepthMax;
@@ -1319,7 +1656,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 					return;
 				}
 			} else {
-				m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + moveSpeed * 0.75f * deltaTime);
+                m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + baseSpeed * 0.75f * deltaTime);
 			}
 		}
 	}
@@ -1577,4 +1914,32 @@ void Realtime::createPortalQuad() {
 void Realtime::releasePortalQuad() {
     if (m_portalVBO) { glDeleteBuffers(1, &m_portalVBO); m_portalVBO = 0; }
     if (m_portalVAO) { glDeleteVertexArrays(1, &m_portalVAO); m_portalVAO = 0; }
+}
+
+void Realtime::createOrResizeFullscreenFBO(int width, int height) {
+    if (width <= 0 || height <= 0) return;
+    if (m_fullscreenFBO == 0) {
+        glGenFramebuffers(1, &m_fullscreenFBO);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_fullscreenFBO);
+    if (m_fullscreenColorTex == 0) {
+        glGenTextures(1, &m_fullscreenColorTex);
+    }
+    glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_fullscreenColorTex, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "Fullscreen FBO incomplete: 0x" << std::hex << status << std::dec << std::endl;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void Realtime::releaseFullscreenFBO() {
+    if (m_fullscreenColorTex) { glDeleteTextures(1, &m_fullscreenColorTex); m_fullscreenColorTex = 0; }
+    if (m_fullscreenFBO) { glDeleteFramebuffers(1, &m_fullscreenFBO); m_fullscreenFBO = 0; }
 }

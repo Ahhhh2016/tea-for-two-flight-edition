@@ -100,6 +100,7 @@ private:
     std::vector<DrawItem> m_draws;
     RenderData m_render;
     Camera m_camera;
+    Camera m_cameraWater;                                // Independent camera for Water scene
     // Cache for textures by absolute file path
     std::unordered_map<std::string, GLuint> m_textureCache;
     // LOD rebuild tracking
@@ -122,6 +123,8 @@ private:
     GLuint m_postProgIQ = 0;        // Shadertoy rainforest full-screen shader
 	GLuint m_postProgWater = 0;     // Water full-screen shader
     GLuint m_postProgToon = 0;      // Toon shader
+    GLuint m_postProgDirectional = 0; // Simple screen directional blur (fullscreen IQ sprint)
+
     GLuint m_screenVAO = 0;
     GLuint m_screenVBO = 0;
 
@@ -136,6 +139,7 @@ private:
     GLuint m_portalVBO = 0;
 	glm::mat4 m_portalModel = glm::mat4(1.f); // world transform of the portal quad (XY plane)
 	float     m_portalHalfSize = 0.5f;        // half-extent in local X/Y
+	bool      m_portalAutoCenterY = false;    // if true, keep portal centered at active camera's Y every frame
 
     // Portal traversal state
     float m_portalDepthMax = 1.0f;    // virtual distance to traverse through portal
@@ -146,6 +150,22 @@ private:
     // Cached framebuffer size for textures
     int m_fbWidth = 0;
     int m_fbHeight = 0;
+
+    // Fullscreen offscreen target for IQ when applying sprint blur
+    GLuint m_fullscreenFBO = 0;
+    GLuint m_fullscreenColorTex = 0;
+
+    // Sprint speed accumulation and live speed
+    float m_moveSpeedBase = 5.0f;          // base units/sec
+    float m_sprintAccum = 0.0f;            // 0..m_sprintAccumMax
+    float m_sprintAccumMax = 2.0f;         // +200% -> 3x base
+	float m_sprintAccelPerSec = 1.5f;     // accumulation rate while holding sprint (slower ramp)
+    float m_sprintDecayPerSec = 2.0f;      // decay rate when not holding sprint
+    float m_currentSpeedUnits = 5.0f;      // last computed current speed (units/sec)
+	// Shift-hold gating for motion blur
+	float m_shiftHoldSec = 0.0f;           // seconds Shift has been held continuously
+	bool  m_sprintBlurUnlocked = false;    // becomes true after holding Shift >= threshold; resets when speed returns to base
+	float m_shiftHoldRamp01 = 0.0f;        // ramp factor 0..1 during first 2s hold for smooth blur-in
 
     // Previous camera matrices (for motion blur reprojection)
     glm::mat4 m_prevV = glm::mat4(1.f);
@@ -168,4 +188,7 @@ private:
     void releasePortalFBO();
     void createPortalQuad();
     void releasePortalQuad();
+    // Fullscreen helpers for IQ sprint blur
+    void createOrResizeFullscreenFBO(int width, int height);
+    void releaseFullscreenFBO();
 };
