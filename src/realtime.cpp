@@ -33,6 +33,7 @@ Realtime::Realtime(QWidget *parent)
     m_keyMap[Qt::Key_D]       = false;
     m_keyMap[Qt::Key_Alt]     = false;
     m_keyMap[Qt::Key_Space]   = false;
+    m_keyMap[Qt::Key_Shift]   = false;
 
     // If you must use this function, do not edit anything above this
     // Initialize Water camera with sensible defaults (independent from rainforest camera)
@@ -564,7 +565,7 @@ void Realtime::paintGL() {
     glDisable(GL_DEPTH_TEST); // disable depth test for post-processing
 
     // Select post program
-    bool useMotion = settings.extraCredit4 && !m_debugDepth;
+    bool useMotion = (settings.extraCredit4 || m_keyMap[Qt::Key_Shift]) && !m_debugDepth;
     if (m_debugDepth && m_postProgDepth) {
         glUseProgram(m_postProgDepth);
     } else if (useMotion && m_postProgMotion) {
@@ -1061,6 +1062,8 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Accumulate time for shaders needing iTime
     m_timeSec += deltaTime;
     const float moveSpeed = 5.0f; // world-space units per second
+    const float sprintMultiplier = m_keyMap[Qt::Key_Shift] ? 5.0f : 1.0f;
+    const float currentSpeed = moveSpeed * sprintMultiplier;
     glm::vec3 displacement(0.f);
 
     // Route movement to Water camera when Water is the fullscreen scene (no scenefile)
@@ -1093,7 +1096,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
     }
 
     if (glm::length(displacement) > 0.f) {
-        displacement = glm::normalize(displacement) * (moveSpeed * deltaTime);
+        displacement = glm::normalize(displacement) * (currentSpeed * deltaTime);
         cam.setPosition(cam.getPosition() + displacement);
     }
 
@@ -1145,7 +1148,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 		if (portalRenderable &&
 			settings.fullscreenScene == FullscreenScene::IQ) {
 			if (insidePortalRect && m_keyMap[Qt::Key_W] && cooldownReady) {
-				m_portalDepth -= moveSpeed * deltaTime;
+				m_portalDepth -= currentSpeed * deltaTime;
 				if (m_portalDepth <= 0.f) {
 					settings.fullscreenScene = FullscreenScene::Water;
                     glm::vec3 p = m_camera.getPosition();
@@ -1163,7 +1166,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 		else if (settings.sceneFilePath.empty() &&
 				 settings.fullscreenScene == FullscreenScene::Water) {
 			if (insidePortalRect && m_keyMap[Qt::Key_S] && cooldownReady) {
-				m_portalDepth -= moveSpeed * deltaTime;
+				m_portalDepth -= currentSpeed * deltaTime;
 				if (m_portalDepth <= 0.f) {
 					settings.fullscreenScene = FullscreenScene::IQ;
 					m_portalDepth = m_portalDepthMax;
