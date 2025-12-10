@@ -634,11 +634,23 @@ void Realtime::renderFullscreenProcedural(){
             GLint locM = glGetUniformLocation(m_portalProg, "u_M");
             GLint locV = glGetUniformLocation(m_portalProg, "u_V");
             GLint locP = glGetUniformLocation(m_portalProg, "u_P");
+
+            GLint locTime      = glGetUniformLocation(m_portalProg, "u_time");
+            GLint locRadius    = glGetUniformLocation(m_portalProg, "u_radius");
+            GLint locEdgeWidth = glGetUniformLocation(m_portalProg, "u_edgeWidth");
+            GLint locEdgeColor = glGetUniformLocation(m_portalProg, "u_edgeColor");
+
             if (locSamp >= 0) glUniform1i(locSamp, 0);
             if (locAlpha >= 0) glUniform1f(locAlpha, 1.0f);
             if (locM >= 0) glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(m_portalModel));
             if (locV >= 0) glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(m_camera.getViewMatrix()));
             if (locP >= 0) glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(m_camera.getProjectionMatrix()));
+
+            if (locTime >= 0)      glUniform1f(locTime, m_timeSec);
+            if (locRadius >= 0)    glUniform1f(locRadius, 0.8f);    // tweak: smaller or larger hole
+            if (locEdgeWidth >= 0) glUniform1f(locEdgeWidth, 0.08f); // thickness of the glow
+            if (locEdgeColor >= 0) glUniform3f(locEdgeColor, 0.5f, 0.9f, 1.2f);
+
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
             glBindVertexArray(m_portalVAO);
@@ -946,24 +958,18 @@ void Realtime::renderGeometryScene() {
 
 void Realtime::paintGL() {
     SceneRenderMode mode = computeRenderMode();
-    std::cout << "[Planet DEBUG] paintGL mode=" << int(mode)
-              << " fullscreenScene=" << int(settings.fullscreenScene)
-              << " sceneFilePath.empty=" << settings.sceneFilePath.empty()
-              << " m_draws=" << m_draws.size()
-              << " m_vertexCount=" << m_vertexCount
-              << std::endl;
     switch (mode) {
 
     case SceneRenderMode::FullscreenProcedural:
-        renderFullscreenProcedural();  // we will create this
+        renderFullscreenProcedural();
         return;
 
     case SceneRenderMode::PlanetGeometryScene:
-        renderPlanetScene();           // we will create this
+        renderPlanetScene();
         return;
 
     case SceneRenderMode::GeometryScene:
-        renderGeometryScene();         // we will create this
+        renderGeometryScene();
         return;
     }
 }
@@ -1345,10 +1351,6 @@ void Realtime::buildPlanetScene() {
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER, cpuData.size() * sizeof(float),
                  cpuData.data(), GL_STATIC_DRAW);
-    std::cout << "[Planet DEBUG] buildPlanetScene finished. m_draws="
-              << m_draws.size()
-              << " m_vertexCount=" << m_vertexCount << std::endl;
-
 }
 
 
@@ -1427,7 +1429,6 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
     }
     // Toon shading scene:
     if (event->key() == Qt::Key_T) {
-        std::cout << "[Planet DEBUG] T pressed → Planet mode, building planet scene\n";
         settings.sceneFilePath.clear();
         settings.fullscreenScene = FullscreenScene::Planet;
         buildPlanetScene();
@@ -1450,8 +1451,6 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
             m_prevV = m_camera.getViewMatrix();
             m_prevP = m_camera.getProjectionMatrix();
         }
-        std::cout << "[Planet DEBUG] after buildPlanetScene: m_draws=" << m_draws.size()
-                  << " m_vertexCount=" << m_vertexCount << std::endl;
         update();
         return;
     }
