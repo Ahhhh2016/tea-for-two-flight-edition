@@ -458,21 +458,16 @@ void Realtime::renderFullscreenProcedural(){
                         glUniform1f(locExposure, 1.0f);
                     }
                     glDrawArrays(GL_TRIANGLES, 0, 6);
-                    // If we're in Water and portal is enabled, composite a simple portal quad on top
+                    // If we're in Water and portal is enabled, composite portal showing Planet
                     if (settings.fullscreenScene == FullscreenScene::Water &&
                         m_portalEnabled &&
                         m_portalProg != 0 && m_portalVAO != 0 &&
                         m_portalFBO != 0 && m_portalColorTex != 0) {
-                        // Ensure portal texture has content: clear portal FBO to a distinct color
-                        glBindFramebuffer(GL_FRAMEBUFFER, m_portalFBO);
-                        glViewport(0, 0, m_portalWidth, m_portalHeight);
-                        const float portalC[4] = {0.2f, 0.0f, 0.4f, 1.0f}; // purple tint placeholder
-                        glClearBufferfv(GL_COLOR, 0, portalC);
-                        // Back to default framebuffer
+                        // Render Planet into portal FBO
+                        renderPlanetIntoPortalFBO();
+                        // Back to default framebuffer for compositing
                         glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
-                        if (prevFBO == 0) {
-                            glViewport(0, 0, outW, outH);
-                        }
+                        if (prevFBO == 0) glViewport(0, 0, outW, outH);
                         // Draw portal quad in world-space using Water camera matrices
                         glEnable(GL_BLEND);
                         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -733,6 +728,76 @@ void Realtime::renderPlanetScene() {
     m_prevP = P;
     for (auto &d : m_draws) d.prevModel = d.model;
 
+}
+
+void Realtime::renderPlanetIntoPortalFBO() {
+    if (m_portalFBO == 0 || m_portalColorTex == 0 || m_portalWidth <= 0 || m_portalHeight <= 0) {
+        return;
+    }
+
+    // Build planet geometry once if needed (does not switch render mode)
+    static bool s_planetBuiltForPortal = false;
+    if (!s_planetBuiltForPortal || m_vertexCount == 0 || m_draws.empty()) {
+        buildPlanetScene();
+        s_planetBuiltForPortal = true;
+    }
+
+    // Save current framebuffer and viewport
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
+    GLint prevViewport[4];
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+    // Geometry pass renders to m_sceneFBO at m_fbWidth x m_fbHeight
+    glm::mat4 V, P;
+    {
+        GLint ignoredPrev;
+        runGeometryPass(ignoredPrev, V, P);
+    }
+
+    // Post-process toon to the portal FBO at portal resolution
+    glBindFramebuffer(GL_FRAMEBUFFER, m_portalFBO);
+    glViewport(0, 0, m_portalWidth, m_portalHeight);
+    glDisable(GL_DEPTH_TEST);
+
+    glUseProgram(m_postProgToon);
+    glBindVertexArray(m_screenVAO);
+
+    // Bind G-buffer textures from geometry pass
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_sceneTex"), 0);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
+
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_depthTex"), 1);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
+
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_normalTex"), 2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_sceneNormalTex);
+
+    glUniform1f(glGetUniformLocation(m_postProgToon, "u_near"), settings.nearPlane);
+    glUniform1f(glGetUniformLocation(m_postProgToon, "u_far"),  settings.farPlane);
+    glUniform1i(glGetUniformLocation(m_postProgToon, "u_enablePost"), 1);
+
+    // Optional sky texture
+    GLint locSky = glGetUniformLocation(m_postProgToon, "u_skyTex");
+    if (locSky >= 0 && m_skyTex != 0) {
+        glUniform1i(locSky, 3);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, m_skyTex);
+    }
+
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Update previous matrices for consistent motion if needed later
+    m_prevV = V;
+    m_prevP = P;
+    for (auto &d : m_draws) d.prevModel = d.model;
+
+    // Restore framebuffer and viewport
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+    glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
 }
 
 void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
