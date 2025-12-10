@@ -83,6 +83,7 @@ private:
     std::vector<DrawItem> m_draws;
     RenderData m_render;
     Camera m_camera;
+    Camera m_cameraWater;                                // Independent camera for Water scene
     // Cache for textures by absolute file path
     std::unordered_map<std::string, GLuint> m_textureCache;
     // LOD rebuild tracking

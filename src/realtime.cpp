@@ -35,6 +35,16 @@ Realtime::Realtime(QWidget *parent)
     m_keyMap[Qt::Key_Space]   = false;
 
     // If you must use this function, do not edit anything above this
+    // Initialize Water camera with sensible defaults (independent from rainforest camera)
+    {
+        m_cameraWater.setPosition(glm::vec3(0.f, 1.5f, 4.f));
+        m_cameraWater.setLook(glm::normalize(glm::vec3(0.f, 0.f, -1.f)));
+        m_cameraWater.setUp(glm::vec3(0.f, 1.f, 0.f));
+        m_cameraWater.setFovYRadians(glm::radians(60.f));
+        float aspect = size().height() > 0 ? float(size().width()) / float(size().height()) : 1.f;
+        m_cameraWater.setAspectRatio(aspect);
+        m_cameraWater.setClipPlanes(0.1f, 1000.f);
+    }
 }
 
 void Realtime::finish() {
@@ -263,16 +273,16 @@ void Realtime::paintGL() {
                         if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
                     }
                 } else if (prog == m_postProgWater) {
-                    // Provide stable defaults for water camera independent of rainforest changes
+                    // Upload Water camera (interactive when Water is fullscreen)
                     GLint locCamPosW  = glGetUniformLocation(prog, "u_camPos");
                     GLint locCamLookW = glGetUniformLocation(prog, "u_camLook");
                     GLint locCamUpW   = glGetUniformLocation(prog, "u_camUp");
                     GLint locFovYW    = glGetUniformLocation(prog, "u_camFovY");
                     if (locCamPosW >= 0 || locCamLookW >= 0 || locCamUpW >= 0 || locFovYW >= 0) {
-                        const glm::vec3 camPosW(0.f, 1.5f, 4.f);
-                        const glm::vec3 camLookW(0.f, 0.f, -1.f);
-                        const glm::vec3 camUpW(0.f, 1.f, 0.f);
-                        const float fovYW = 1.04719755f; // 60 degrees in radians
+                        const glm::vec3 camPosW  = m_cameraWater.getPosition();
+                        const glm::vec3 camLookW = glm::normalize(m_cameraWater.getLook());
+                        const glm::vec3 camUpW   = glm::normalize(m_cameraWater.getUp());
+                        const float fovYW        = m_cameraWater.getFovYRadians();
                         if (locCamPosW  >= 0) glUniform3f(locCamPosW,  camPosW.x,  camPosW.y,  camPosW.z);
                         if (locCamLookW >= 0) glUniform3f(locCamLookW, camLookW.x, camLookW.y, camLookW.z);
                         if (locCamUpW   >= 0) glUniform3f(locCamUpW,   camUpW.x,   camUpW.y,   camUpW.z);
@@ -313,17 +323,17 @@ void Realtime::paintGL() {
                 float clickY = m_mouseDown ? mouseY : 0.f;
                 glUniform4f(locMouseB, mouseX, mouseY, clickX, clickY);
             }
-			// Stable camera defaults for Water in portal
+			// Water camera for portal rendering (uses m_cameraWater)
             {
                 GLint locCamPosW  = glGetUniformLocation(m_postProgWater, "u_camPos");
                 GLint locCamLookW = glGetUniformLocation(m_postProgWater, "u_camLook");
                 GLint locCamUpW   = glGetUniformLocation(m_postProgWater, "u_camUp");
                 GLint locFovYW    = glGetUniformLocation(m_postProgWater, "u_camFovY");
                 if (locCamPosW >= 0 || locCamLookW >= 0 || locCamUpW >= 0 || locFovYW >= 0) {
-                    const glm::vec3 camPosW(0.f, 1.5f, 4.f);
-                    const glm::vec3 camLookW(0.f, 0.f, -1.f);
-                    const glm::vec3 camUpW(0.f, 1.f, 0.f);
-                    const float fovYW = 1.04719755f; // 60 degrees in radians
+                    const glm::vec3 camPosW  = m_cameraWater.getPosition();
+                    const glm::vec3 camLookW = glm::normalize(m_cameraWater.getLook());
+                    const glm::vec3 camUpW   = glm::normalize(m_cameraWater.getUp());
+                    const float fovYW        = m_cameraWater.getFovYRadians();
                     if (locCamPosW  >= 0) glUniform3f(locCamPosW,  camPosW.x,  camPosW.y,  camPosW.z);
                     if (locCamLookW >= 0) glUniform3f(locCamLookW, camLookW.x, camLookW.y, camLookW.z);
                     if (locCamUpW   >= 0) glUniform3f(locCamUpW,   camUpW.x,   camUpW.y,   camUpW.z);
@@ -637,6 +647,7 @@ void Realtime::resizeGL(int w, int h) {
     // Students: anything requiring OpenGL calls when the program starts should be done here
 	float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
 	m_camera.setAspectRatio(aspect);
+    m_cameraWater.setAspectRatio(aspect);
 
     int fbw = size().width() * m_devicePixelRatio;
     int fbh = size().height() * m_devicePixelRatio;
@@ -675,6 +686,9 @@ void Realtime::sceneChanged(bool preserveCamera) {
         m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
         float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
         m_camera.setAspectRatio(aspect);
+        // Keep Water camera clip/aspect in sync
+        m_cameraWater.setClipPlanes(settings.nearPlane, settings.farPlane);
+        m_cameraWater.setAspectRatio(aspect);
 
         // Generate terrain
         TerrainGenerator tg;
@@ -762,6 +776,8 @@ void Realtime::sceneChanged(bool preserveCamera) {
         m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
         float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
         m_camera.setAspectRatio(aspect);
+        m_cameraWater.setClipPlanes(settings.nearPlane, settings.farPlane);
+        m_cameraWater.setAspectRatio(aspect);
 
         rebuildGeometryFromRenderData();
     }
@@ -926,6 +942,8 @@ void Realtime::settingsChanged() {
 		m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
 		float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
 		m_camera.setAspectRatio(aspect);
+        m_cameraWater.setClipPlanes(settings.nearPlane, settings.farPlane);
+        m_cameraWater.setAspectRatio(aspect);
 		sceneChanged();
 		return;
     }
@@ -991,8 +1009,12 @@ void Realtime::mouseMoveEvent(QMouseEvent *event) {
         float yaw   = -static_cast<float>(deltaX) * sensitivity; // rotate around world up
         float pitch = -static_cast<float>(deltaY) * sensitivity; // rotate around camera right (perpendicular to look and up)
 
-        glm::vec3 look = m_camera.getLook();
-        glm::vec3 up   = m_camera.getUp();
+        // Route input to Water camera when Water is the fullscreen scene (no scenefile)
+        bool routeToWater = settings.sceneFilePath.empty() && (settings.fullscreenScene == FullscreenScene::Water);
+        Camera &cam = routeToWater ? m_cameraWater : m_camera;
+
+        glm::vec3 look = cam.getLook();
+        glm::vec3 up   = cam.getUp();
         const glm::vec3 worldUp(0.f, 1.f, 0.f);
 
         if (yaw != 0.f) {
@@ -1023,8 +1045,8 @@ void Realtime::mouseMoveEvent(QMouseEvent *event) {
         glm::vec3 right = glm::normalize(glm::cross(look, up));
         up = glm::normalize(glm::cross(right, look));
 
-        m_camera.setLook(look);
-        m_camera.setUp(up);
+        cam.setLook(look);
+        cam.setUp(up);
 
         update(); // asks for a PaintGL() call to occur
     }
@@ -1041,8 +1063,12 @@ void Realtime::timerEvent(QTimerEvent *event) {
     const float moveSpeed = 5.0f; // world-space units per second
     glm::vec3 displacement(0.f);
 
-    const glm::vec3 lookDir = glm::normalize(m_camera.getLook());
-    const glm::vec3 upDir   = glm::normalize(m_camera.getUp());
+    // Route movement to Water camera when Water is the fullscreen scene (no scenefile)
+    bool routeToWater = settings.sceneFilePath.empty() && (settings.fullscreenScene == FullscreenScene::Water);
+    Camera &cam = routeToWater ? m_cameraWater : m_camera;
+
+    const glm::vec3 lookDir = glm::normalize(cam.getLook());
+    const glm::vec3 upDir   = glm::normalize(cam.getUp());
     const glm::vec3 rightDir = glm::normalize(glm::cross(lookDir, upDir)); // right, perpendicular to look and up
     const glm::vec3 worldUp(0.f, 1.f, 0.f);
 
@@ -1068,7 +1094,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
 
     if (glm::length(displacement) > 0.f) {
         displacement = glm::normalize(displacement) * (moveSpeed * deltaTime);
-        m_camera.setPosition(m_camera.getPosition() + displacement);
+        cam.setPosition(cam.getPosition() + displacement);
     }
 
 	// Portal traversal via keyboard:
@@ -1084,9 +1110,11 @@ void Realtime::timerEvent(QTimerEvent *event) {
 
 		// Ray-portal intersection test in world space using camera forward ray
 		bool insidePortalRect = false;
-		{
-			const glm::vec3 camPos = m_camera.getPosition();
-			const glm::vec3 rayDir = glm::normalize(m_camera.getLook());
+        {
+            // Use the active scene's camera for portal picking
+            const bool waterActive = (settings.fullscreenScene == FullscreenScene::Water);
+            const glm::vec3 camPos = waterActive ? m_cameraWater.getPosition() : m_camera.getPosition();
+            const glm::vec3 rayDir = glm::normalize(waterActive ? m_cameraWater.getLook() : m_camera.getLook());
 			const glm::vec3 center = glm::vec3(m_portalModel * glm::vec4(0.f, 0.f, 0.f, 1.f));
 			const glm::vec3 axisX  = glm::vec3(m_portalModel * glm::vec4(1.f, 0.f, 0.f, 0.f));
 			const glm::vec3 axisY  = glm::vec3(m_portalModel * glm::vec4(0.f, 1.f, 0.f, 0.f));
