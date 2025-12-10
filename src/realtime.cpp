@@ -1110,6 +1110,14 @@ void Realtime::timerEvent(QTimerEvent *event) {
 			m_portalCooldownTimer = std::max(0.f, m_portalCooldownTimer - deltaTime);
 		}
 		const bool cooldownReady = (m_portalCooldownTimer <= 0.f);
+ 
+		// Keep the portal centered at the active camera's height so the ray test
+		// can hit the portal rectangle from either side (IQ or Water)
+		if (settings.sceneFilePath.empty() && m_portalEnabled) {
+			const bool waterActiveNow = (settings.fullscreenScene == FullscreenScene::Water);
+			const float camY = waterActiveNow ? m_cameraWater.getPosition().y : m_camera.getPosition().y;
+			m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, camY, 0.f));
+		}
 
 		// Ray-portal intersection test in world space using camera forward ray
 		bool insidePortalRect = false;
