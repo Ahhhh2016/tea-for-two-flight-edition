@@ -103,6 +103,7 @@ private:
     GLuint m_postProgDepth = 0;     // Depth debug
     GLuint m_postProgIQ = 0;        // Shadertoy rainforest full-screen shader
 	GLuint m_postProgWater = 0;     // Water full-screen shader
+    GLuint m_postProgDirectional = 0; // Simple screen directional blur (fullscreen IQ sprint)
     GLuint m_screenVAO = 0;
     GLuint m_screenVBO = 0;
 
@@ -128,6 +129,10 @@ private:
     int m_fbWidth = 0;
     int m_fbHeight = 0;
 
+    // Fullscreen offscreen target for IQ when applying sprint blur
+    GLuint m_fullscreenFBO = 0;
+    GLuint m_fullscreenColorTex = 0;
+
     // Previous camera matrices (for motion blur reprojection)
     glm::mat4 m_prevV = glm::mat4(1.f);
     glm::mat4 m_prevP = glm::mat4(1.f);
@@ -149,4 +154,7 @@ private:
     void releasePortalFBO();
     void createPortalQuad();
     void releasePortalQuad();
+    // Fullscreen helpers for IQ sprint blur
+    void createOrResizeFullscreenFBO(int width, int height);
+    void releaseFullscreenFBO();
 };

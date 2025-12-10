@@ -89,6 +89,7 @@ qt6_add_resources(${PROJECT_NAME} "Resources"
         resources/shaders/post.vert
         resources/shaders/dof.frag
         resources/shaders/motionblur.frag
+        resources/shaders/directional_blur.frag
         resources/shaders/debug_depth.frag
         resources/shaders/iq_rainforest.frag
         resources/shaders/water.frag
