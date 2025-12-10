@@ -128,8 +128,11 @@ private:
     GLuint m_screenVAO = 0;
     GLuint m_screenVBO = 0;
 
+	// Renders the Planet scene into the portal FBO at portal resolution
+	void renderPlanetIntoPortalFBO();
+
     // Portal rendering (Scene B -> texture, composited into Scene A)
-    bool   m_portalEnabled = true;
+    bool   m_portalEnabled = false;
     GLuint m_portalFBO = 0;
     GLuint m_portalColorTex = 0;
     int    m_portalWidth = 0;
