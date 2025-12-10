@@ -6,7 +6,8 @@
 enum class FullscreenScene {
 	None = 0,
 	IQ = 1,
-	Water = 2
+    Water = 2,
+    Planet = 3
 };
 
 struct Settings {

@@ -43,6 +43,7 @@ private:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void timerEvent(QTimerEvent *event) override;
+    void buildPlanetScene();
 
     // Tick Related Variables
     int m_timer;                                        // Stores timer which attempts to run ~60 times per second
@@ -74,6 +75,11 @@ private:
         GLuint texture = 0;
         glm::vec2 texRepeat = glm::vec2(1.f);
         float blend = 1.f;
+        // Planet scene
+        bool isPlanet = false;
+        bool isSand = false;
+        glm::vec3 planetColorA; //light band color
+        glm::vec3 planetColorB; //dark band color
     };
 
     GLuint m_prog = 0;
@@ -95,6 +101,8 @@ private:
     GLuint m_sceneColorTex = 0;
     GLuint m_sceneDepthTex = 0;
     GLuint m_sceneVelocityTex = 0;
+    GLuint m_sceneNormalTex = 0;
+    GLuint m_skyTex = 0;
 
     // Screen-quad for post-processing
     GLuint m_postProg = 0;          // DoF
@@ -102,6 +110,7 @@ private:
     GLuint m_postProgDepth = 0;     // Depth debug
     GLuint m_postProgIQ = 0;        // Shadertoy rainforest full-screen shader
 	GLuint m_postProgWater = 0;     // Water full-screen shader
+    GLuint m_postProgToon = 0;      // Toon shader
     GLuint m_screenVAO = 0;
     GLuint m_screenVBO = 0;
 

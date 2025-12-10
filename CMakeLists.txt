@@ -60,6 +60,7 @@ add_executable(${PROJECT_NAME}
     src/utils/Camera.h
     src/utils/ObjLoader.h
     src/terraingenerator.h
+    resources/shaders/toon.frag
 )
 
 # GLM: this creates its library and allows you to `#include "glm/..."`
@@ -94,6 +95,8 @@ qt6_add_resources(${PROJECT_NAME} "Resources"
         resources/shaders/water.frag
         resources/shaders/portal.vert
         resources/shaders/portal.frag
+        resources/shaders/toon.frag
+        resources/images/sky1.png
 )
 
 # GLEW: this provides support for Windows (including 64-bit)

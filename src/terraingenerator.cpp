@@ -126,15 +126,29 @@ glm::vec3 TerrainGenerator::getPosition(int row, int col) {
 // Takes a normalized (x, y) position, in range [0,1)
 // Returns a height value, z, by sampling a noise function
 float TerrainGenerator::getHeight(float x, float y) {
-    // Task 6: modify this call to produce noise of a different frequency
-    float z1 = computePerlin(x * 2.0f, y * 2.0f) / 2.0f;
+    // Map [0,1] -> [0, 2π] so the terrain repeats every 1 unit in x,y
+    float ax = 2.f * M_PI * x;
+    float ay = 2.f * M_PI * y;
 
-    // Task 7: combine multiple different octaves of noise to produce fractal perlin noise
-    float z2 = computePerlin(x * 4.0f, y * 4.0f) / 4.0f;
-    float z3 = computePerlin(x * 8.0f, y * 8.0f) / 8.0f;
-    float z4 = computePerlin(x * 16.0f, y * 16.0f) / 16.0f;
+    float hSine = 0.f;
+    float amp  = 0.5f;
+    float freq = 1.f;
 
-    return z1 + z2 + z3 + z4;
+    for (int octave = 0; octave < 5; ++octave) {
+        float phaseX = 0.7f * octave + 0.3f;
+        float phaseY = 1.1f * octave + 0.9f;
+        float term = std::sin(freq * ax + phaseX) * std::sin(freq * ay + phaseY);
+        hSine += amp * term;
+        amp  *= 0.5f;
+        freq *= 2.f;
+    }
+
+    // --- add Perlin detail ---
+    float perlin = computePerlin(x * 6.0f, y * 6.0f); // more local bumps
+    // Perlin from this implementation is ~[-0.7, 0.7]; scale down a bit
+    float h = 0.75f * hSine + 0.35f * perlin;
+
+    return 1.2f*h;
 }
 
 // Computes the normal of a vertex by averaging neighbors
@@ -165,10 +179,23 @@ glm::vec3 TerrainGenerator::getNormal(int row, int col) {
 // Computes color of vertex using normal and, optionally, position
 glm::vec3 TerrainGenerator::getColor(glm::vec3 normal, glm::vec3 position) {
     // Task 10: compute color as a function of the normal and position
-    if (glm::dot(normal, glm::vec3(0, 0, 1)) >= 0.6f && position.z > 0.06f) return glm::vec3(1, 1, 1);
-    return glm::vec3(0.5f, 0.5f, 0.5f);
-}
+    // if (glm::dot(normal, glm::vec3(0, 0, 1)) >= 0.6f && position.z > 0.06f) return glm::vec3(1, 1, 1);
+    // return glm::vec3(0.5f, 0.5f, 0.5f);
+    float h = position.z;              // your height in [0, ~0.9]
+    // Base sand color
+    glm::vec3 sandBase(0.98f, 0.89f, 0.8f); // tweak if you want
 
+    // Very small height-based variation (no sharp bands)
+    float hNorm = glm::clamp(h * 1.2f + 0.5f, 0.0f, 1.0f);
+    float brightFactor = glm::mix(0.9f, 1.1f, hNorm); // 0.9–1.1 range
+    glm::vec3 base = sandBase * brightFactor;
+
+    // Slight darkening on steep slopes so silhouettes read better
+    float slope = 1.0f - glm::abs(glm::dot(normal, glm::vec3(0, 0, 1)));
+    float shade = glm::mix(1.0f, 0.7f, slope); // 1 on flat, 0.7 on vertical
+
+    return base * shade;
+}
 // Computes the intensity of Perlin noise at some point
 float TerrainGenerator::computePerlin(float x, float y) {
     // Task 1: get grid indices (as ints)

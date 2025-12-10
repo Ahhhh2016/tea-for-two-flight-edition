@@ -69,6 +69,14 @@ void Realtime::finish() {
         glDeleteProgram(m_portalProg);
         m_portalProg = 0;
     }
+    if (m_postProgToon) {
+        glDeleteProgram(m_postProgToon);
+        m_postProgToon = 0;
+    }
+    if (m_skyTex) {
+        glDeleteTextures(1, &m_skyTex);
+        m_skyTex = 0;
+    }
     releasePortalQuad();
     releasePortalFBO();
 
@@ -132,6 +140,11 @@ void Realtime::initializeGL() {
         // Portal compositing shader
         m_portalProg = ShaderLoader::createShaderProgram(":/resources/shaders/portal.vert",
                                                          ":/resources/shaders/portal.frag");
+        // Toon shader
+        m_postProgToon = ShaderLoader::createShaderProgram(
+            ":/resources/shaders/post.vert",
+            ":/resources/shaders/toon.frag"
+            );
     } catch (const std::exception &e) {
         std::cerr << "Shader error: " << e.what() << std::endl;
         if (m_prog == 0) m_prog = 0;
@@ -141,7 +154,35 @@ void Realtime::initializeGL() {
 		if (m_postProgIQ == 0) m_postProgIQ = 0;
 		if (m_postProgWater == 0) m_postProgWater = 0;
         if (m_portalProg == 0) m_portalProg = 0;
+        if (m_postProgToon == 0) m_postProgToon = 0;
     }
+    // --- Load sky texture for Planet/Toon mode ---
+    {
+        QImage img(":/resources/images/sky1.png");
+        if (!img.isNull()) {
+            QImage rgba = img.convertToFormat(QImage::Format_RGBA8888);
+
+            glGenTextures(1, &m_skyTex);
+            glBindTexture(GL_TEXTURE_2D, m_skyTex);
+
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
+                         rgba.width(), rgba.height(),
+                         0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.constBits());
+            glGenerateMipmap(GL_TEXTURE_2D);
+
+            glBindTexture(GL_TEXTURE_2D, 0);
+        } else {
+            std::cerr << "Failed to load sky texture!" << std::endl;
+        }
+    }
+
+
     glGenVertexArrays(1, &m_vao);
     glGenBuffers(1, &m_vbo);
     glBindVertexArray(m_vao);
@@ -185,8 +226,12 @@ void Realtime::initializeGL() {
 
 void Realtime::paintGL() {
 	// Students: anything requiring OpenGL calls every frame should be done here
-	// Fullscreen shader mode (used when no scene file is loaded)
-	if (settings.sceneFilePath.empty()) {
+    bool fullscreenProcedural = settings.sceneFilePath.empty() &&
+                                (settings.fullscreenScene == FullscreenScene::IQ ||
+                                 settings.fullscreenScene == FullscreenScene::Water);
+
+    // Fullscreen shader mode (used when no scene file is loaded)
+    if (fullscreenProcedural) {
         // Portal path: IQ as Scene A + Water as Scene B
         bool portalActive = (settings.fullscreenScene == FullscreenScene::IQ) &&
                             m_portalEnabled &&
@@ -357,9 +402,11 @@ void Realtime::paintGL() {
         const float colorClear[4] = {1.f, 1.f, 1.f, 1.f};
         const float velocityClear[2] = {0.f, 0.f};
         const float depthClear = 1.f;
+        const float normalClear[4]   = {0.f, 0.f, 1.f, 1.f};
         glClearBufferfv(GL_COLOR, 0, colorClear);   // clear color
         glClearBufferfv(GL_COLOR, 1, velocityClear); //clear velocity buffer
         glClearBufferfv(GL_DEPTH, 0, &depthClear); // clear depth buffer
+        glClearBufferfv(GL_COLOR, 2, normalClear);
     }
     glEnable(GL_DEPTH_TEST); // enable depth test
 
@@ -404,6 +451,14 @@ void Realtime::paintGL() {
     GLint uFogColor = glGetUniformLocation(m_prog, "u_fogColor");
     GLint uFogDensity = glGetUniformLocation(m_prog, "u_fogDensity");
     GLint uFogEnable = glGetUniformLocation(m_prog, "u_fogEnable");
+
+    // Planet uniforms
+    GLint uIsPlanet      = glGetUniformLocation(m_prog, "u_isPlanet");
+    GLint uTime          = glGetUniformLocation(m_prog, "u_time");
+    GLint uPlanetColorA  = glGetUniformLocation(m_prog, "u_planetColorA");
+    GLint uPlanetColorB  = glGetUniformLocation(m_prog, "u_planetColorB");
+    GLint uIsSand        = glGetUniformLocation(m_prog, "u_isSand");
+    if (uTime >= 0) glUniform1f(uTime, m_timeSec);
 
     glUniformMatrix4fv(uV, 1, GL_FALSE, glm::value_ptr(V));
     glUniformMatrix4fv(uP, 1, GL_FALSE, glm::value_ptr(P));
@@ -469,6 +524,18 @@ void Realtime::paintGL() {
         glUniformMatrix4fv(uM, 1, GL_FALSE, glm::value_ptr(d.model));
         glUniformMatrix3fv(uN, 1, GL_FALSE, glm::value_ptr(d.normalMat));
         if (uPrevM >= 0) glUniformMatrix4fv(uPrevM, 1, GL_FALSE, glm::value_ptr(d.prevModel));
+
+        if (uIsPlanet >= 0) {
+            glUniform1i(uIsPlanet, d.isPlanet ? 1 : 0);
+        }
+        if (d.isPlanet) {
+            if (uPlanetColorA >= 0) glUniform3fv(uPlanetColorA, 1, glm::value_ptr(d.planetColorA));
+            if (uPlanetColorB >= 0) glUniform3fv(uPlanetColorB, 1, glm::value_ptr(d.planetColorB));
+        }
+        if (uIsSand >= 0) {
+            glUniform1i(uIsSand, d.isSand ? 1 : 0);
+        }
+
         glUniform3fv(uKa, 1, glm::value_ptr(d.ka));
         glUniform3fv(uKd, 1, glm::value_ptr(d.kd));
         glUniform3fv(uKs, 1, glm::value_ptr(d.ks));
@@ -497,10 +564,14 @@ void Realtime::paintGL() {
 
     // Select post program
     bool useMotion = settings.extraCredit4 && !m_debugDepth;
+    bool useToon = (settings.fullscreenScene == FullscreenScene::Planet);
+
     if (m_debugDepth && m_postProgDepth) {
         glUseProgram(m_postProgDepth);
     } else if (useMotion && m_postProgMotion) {
         glUseProgram(m_postProgMotion);
+    } else if (useToon && m_postProgToon){
+        glUseProgram(m_postProgToon);
     } else {
         glUseProgram(m_postProg);
     }
@@ -529,6 +600,50 @@ void Realtime::paintGL() {
         glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, m_sceneVelocityTex);
+    } else if (useToon && m_postProgToon) {
+        // === TOON POST-PROCESS ===
+        // Map C++ FBO textures -> GLSL uniforms:
+        //   u_sceneTex  <- m_sceneColorTex   (unit 0)
+        //   u_depthTex  <- m_sceneDepthTex   (unit 1)
+        //   u_normalTex <- m_sceneNormalTex  (unit 2)
+        //   u_near      <- settings.nearPlane
+        //   u_far       <- settings.farPlane
+        //   u_enablePost<- true (or a setting)
+
+        GLint locScene   = glGetUniformLocation(m_postProgToon, "u_sceneTex");
+        GLint locDepth   = glGetUniformLocation(m_postProgToon, "u_depthTex");
+        GLint locNormal  = glGetUniformLocation(m_postProgToon, "u_normalTex");
+        GLint locNear    = glGetUniformLocation(m_postProgToon, "u_near");
+        GLint locFar     = glGetUniformLocation(m_postProgToon, "u_far");
+        GLint locEnable  = glGetUniformLocation(m_postProgToon, "u_enablePost");
+        // Sky texture
+        GLint locSkyTex = glGetUniformLocation(m_postProgToon, "u_skyTex");
+
+        if (locScene  >= 0) glUniform1i(locScene,  0);
+        if (locDepth  >= 0) glUniform1i(locDepth,  1);
+        if (locNormal >= 0) glUniform1i(locNormal, 2);
+        if (locNear   >= 0) glUniform1f(locNear,   settings.nearPlane);
+        if (locFar    >= 0) glUniform1f(locFar,    settings.farPlane);
+
+        bool enablePost = true;
+        if (locEnable >= 0) glUniform1i(locEnable, enablePost ? 1 : 0);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, m_sceneColorTex);
+
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
+
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, m_sceneNormalTex);
+
+        if (locSkyTex >= 0 && m_skyTex != 0) {
+            glUniform1i(locSkyTex, 3);
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, m_skyTex);
+        }
+
+
     } else {
         // dof and fog
         GLint locColor = glGetUniformLocation(m_postProg, "u_colorTex");
@@ -588,99 +703,18 @@ void Realtime::resizeGL(int w, int h) {
 
 void Realtime::sceneChanged(bool preserveCamera) {
     if (settings.sceneFilePath.empty()) {
-        // generate procedural terrain when no scene file is provided
+        // No JSON scene: just clear all geometry so we get a blank/clear screen
 
         m_draws.clear();
-        // m_vertexCount = 0;
+        m_vertexCount = 0;
         m_render.shapes.clear();
         m_render.lights.clear();
 
-        // Reasonable default globals 
-        m_render.globalData.ka = 0.1f;
-        m_render.globalData.kd = 1.0f;
-        m_render.globalData.ks = 0.3f;
-        m_render.globalData.kt = 0.0f;
-
-        // Provide a default directional light (sunlight)
-        SceneLightData L{};
-        L.id = 0;
-        L.type = LightType::LIGHT_DIRECTIONAL;
-        L.color = glm::vec4(1.f, 1.f, 1.f, 1.f);
-        L.function = glm::vec3(1.f, 0.f, 0.f);
-        L.dir = glm::normalize(glm::vec4(0.3f, -1.0f, 0.2f, 0.f));
-        L.pos = glm::vec4(0.f, 0.f, 0.f, 1.f);
-        L.angle = 0.f;
-        L.penumbra = 0.f;
-        m_render.lights.push_back(L);
-
-        // Set up camera parameters (near/far/aspect) and keep current position/orientation
+        // Keep camera valid
         m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
-        float aspect = float(size().width() * m_devicePixelRatio) / float(size().height() * m_devicePixelRatio);
+        float aspect = float(size().width() * m_devicePixelRatio) /
+                       float(size().height() * m_devicePixelRatio);
         m_camera.setAspectRatio(aspect);
-
-        // Generate terrain
-        TerrainGenerator tg;
-        std::vector<float> pnc = tg.generateTerrain(); // [ px,py,pz, nx,ny,nz, r,g,b ] per vertex
-        std::vector<float> cpuData;
-        cpuData.reserve((pnc.size() / 9) * 8);
-        for (size_t i = 0; i + 8 < pnc.size(); i += 9) {
-            float px = pnc[i + 0];
-            float py = pnc[i + 1];
-            float pz = pnc[i + 2];
-            float nx = pnc[i + 3];
-            float ny = pnc[i + 4];
-            float nz = pnc[i + 5];
-
-            // uv derived from normalized x,y
-            float u = px;
-            float v = py;
-
-            // repack to (P,N,UV) for our VAO layout
-            cpuData.push_back(px);
-            cpuData.push_back(py);
-            cpuData.push_back(pz);
-            cpuData.push_back(nx);
-            cpuData.push_back(ny);
-            cpuData.push_back(nz);
-            cpuData.push_back(u);
-            cpuData.push_back(v);
-        }
-
-        int vertexCount = static_cast<int>(cpuData.size()) / 8;
-        m_vertexCount = vertexCount;
-
-        // Create a single draw item with a ground-like material
-        DrawItem item{};
-        item.first = 0;
-        item.count = vertexCount;
-
-        item.model = glm::mat4(1.f);
-        item.invModel = glm::mat4(1.f);
-        item.normalMat = glm::mat3(1.f);
-        item.prevModel = item.model;
-        // Center the unit [0,1]^2 terrain around the origin and scale up
-        // const float scaleXY = 50.f;
-        // const float scaleZ  = 10.f;
-        // glm::mat4 T = glm::translate(glm::mat4(1.f), glm::vec3(-0.5f, -0.5f, 0.f));
-        // glm::mat4 S = glm::scale(glm::mat4(1.f), glm::vec3(scaleXY, scaleXY, scaleZ));
-        // item.model = S * T;
-        // item.invModel = glm::inverse(item.model);
-        // item.normalMat = glm::mat3(glm::transpose(glm::inverse(item.model)));
-        item.kd = glm::vec3(0.5f, 0.5f, 0.5f);
-        item.ka = glm::vec3(0.2f, 0.2f, 0.2f);
-        item.ks = glm::vec3(0.1f, 0.1f, 0.1f);
-        item.shininess = 8.f;
-        item.hasTexture = false;
-        m_draws.push_back(item);
-
-        // upload to GPU
-        glBindVertexArray(m_vao);
-        glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-        if (!cpuData.empty()) {
-            glBufferData(GL_ARRAY_BUFFER, cpuData.size() * sizeof(float), cpuData.data(), GL_STATIC_DRAW);
-        } else {
-            glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_STATIC_DRAW);
-        }
 
         update();
         return;
@@ -808,6 +842,8 @@ void Realtime::rebuildGeometryFromRenderData() {
         item.ka = ka;
         item.ks = ks;
         item.shininess = shininess;
+        item.isPlanet = false;
+        item.isSand = false;
         if (mat.textureMap.isUsed) {
             // Load or get from cache
             auto it = m_textureCache.find(mat.textureMap.filename);
@@ -861,6 +897,168 @@ void Realtime::rebuildGeometryFromRenderData() {
 
     update();
 }
+void Realtime::buildPlanetScene() {
+    m_draws.clear();
+    // Reasonable default globals
+    m_render.globalData.ka = 0.1f;
+    m_render.globalData.kd = 1.0f;
+    m_render.globalData.ks = 0.3f;
+    m_render.globalData.kt = 0.0f;
+
+    // Provide a default directional light (sunlight)
+    SceneLightData L{};
+    L.id = 0;
+    L.type = LightType::LIGHT_DIRECTIONAL;
+    L.color = glm::vec4(1.f, 1.f, 1.f, 1.f);
+    L.function = glm::vec3(1.f, 0.f, 0.f);
+    L.dir = glm::normalize(glm::vec4(0.3f, -1.0f, 0.2f, 0.f));
+    L.pos = glm::vec4(0.f, 0.f, 0.f, 1.f);
+    L.angle = 0.f;
+    L.penumbra = 0.f;
+    m_render.lights.push_back(L);
+
+    // -------- terrain --------
+    TerrainGenerator tg;
+    std::vector<float> pnc = tg.generateTerrain();
+
+    std::vector<float> cpuData;
+    cpuData.reserve((pnc.size() / 9) * 8);
+
+    for (size_t i = 0; i + 8 < pnc.size(); i += 9) {
+        float px = pnc[i + 0];
+        float py = pnc[i + 1];
+        float pz = pnc[i + 2];
+        float nx = pnc[i + 3];
+        float ny = pnc[i + 4];
+        float nz = pnc[i + 5];
+
+        float u = px;
+        float v = py;
+
+        cpuData.insert(cpuData.end(), { px, py, pz, nx, ny, nz, u, v });
+    }
+
+    int terrainCount = cpuData.size() / 8;
+
+    DrawItem terrain{};
+    terrain.first = 0;
+    terrain.count = terrainCount;
+
+    // Transform terrain
+    float terrainSize = 40.f;
+    float heightScale = 5.f;
+
+    glm::mat4 M =
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.f, -2.f, 0.f)) *
+        glm::rotate(glm::radians(-90.f), glm::vec3(1.f, 0.f, 0.f)) *
+        glm::scale(glm::mat4(1.0f), glm::vec3(terrainSize, terrainSize, heightScale));
+    glm::mat4 Tcenter = glm::translate(glm::mat4(1.f),
+                                       glm::vec3(-0.5f, -0.5f, 0.f));
+    terrain.model     = M*Tcenter;
+    terrain.invModel  = glm::inverse(M);
+    terrain.normalMat = glm::mat3(glm::transpose(terrain.invModel));
+    terrain.prevModel = terrain.model;
+
+    terrain.kd = glm::vec3(0.9f, 0.5f, 0.15f);
+    terrain.ka = glm::vec3(0.3f, 0.15f, 0.05f);
+    terrain.ks = glm::vec3(0.1f);
+    terrain.shininess = 8.f;
+
+    terrain.isPlanet = false;
+    terrain.isSand   = true;
+
+    m_draws.push_back(terrain);
+
+    // -------- sphere planet --------
+    auto generator = ShapeFactory::create(PrimitiveType::PRIMITIVE_SPHERE);
+    generator->updateParams(25, 25);
+    auto sphereData = generator->generateShape();
+
+    int sphereFirst = terrainCount;
+    int sphereCount = sphereData.size() / 8;
+    cpuData.insert(cpuData.end(), sphereData.begin(), sphereData.end());
+
+    auto makePlanet = [&](glm::vec3 pos,
+                          float radius,
+                          glm::vec3 colA,
+                          glm::vec3 colB) -> DrawItem {
+        DrawItem p{};
+        p.first = sphereFirst;
+        p.count = sphereCount;
+
+        glm::mat4 SM =
+            glm::translate(glm::mat4(1.f), pos) *
+            glm::scale(glm::mat4(1.f), glm::vec3(radius));
+
+        p.model     = SM;
+        p.invModel  = glm::inverse(SM);
+        p.normalMat = glm::mat3(glm::transpose(p.invModel));
+        p.prevModel = p.model;
+
+        p.kd = glm::vec3(1.0f);  // won't matter much for planets
+        p.ka = glm::vec3(0.0f);
+        p.ks = glm::vec3(0.0f);
+        p.shininess = 0.f;
+
+        p.isPlanet     = true;
+        p.planetColorA = colA;
+        p.planetColorB = colB;
+        p.isSand = false;
+
+        return p;
+    };
+
+    // Planet 1 – purple/pink gas giant
+    DrawItem planet1 = makePlanet(
+        glm::vec3(0.f, 0.6f, 1.f),
+        0.8f,
+        glm::vec3(0.3f, 0.2f, 0.6f),  // dark
+        glm::vec3(0.9f, 0.4f, 0.8f)   // light
+        );
+    m_draws.push_back(planet1);
+
+    // Planet 2 – teal/blue
+    DrawItem planet2 = makePlanet(
+        glm::vec3(1.3f, 1.2f, -0.5f),
+        0.35f,
+        glm::vec3(0.1f, 0.4f, 0.4f),
+        glm::vec3(0.6f, 0.9f, 1.0f)
+        );
+    m_draws.push_back(planet2);
+
+    // Planet 3 – orange/brown
+    DrawItem planet3 = makePlanet(
+        glm::vec3(-1.2f, 0.9f, 0.8f),
+        0.5f,
+        glm::vec3(0.4f, 0.2f, 0.05f),
+        glm::vec3(0.9f, 0.7f, 0.3f)
+        );
+    m_draws.push_back(planet3);
+
+    // Planet 4 – large faded background planet up-left
+    m_draws.push_back(makePlanet(
+        glm::vec3(-1.5f, 2.0f, -3.0f),
+        3.f,
+        glm::vec3(0.18f, 0.12f, 0.30f),
+        glm::vec3(0.75f, 0.55f, 0.95f)
+        ));
+
+    // Planet 5 – icy white one far right, fairly small
+    m_draws.push_back(makePlanet(
+        glm::vec3(2.3f, 1.8f, -3.0f),
+        0.30f,
+        glm::vec3(0.6f, 0.7f, 0.8f),
+        glm::vec3(1.0f, 1.0f, 1.0f)
+        ));
+    // -------- Upload to GPU --------
+    m_vertexCount = sphereFirst + sphereCount;
+
+    glBindVertexArray(m_vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    glBufferData(GL_ARRAY_BUFFER, cpuData.size() * sizeof(float),
+                 cpuData.data(), GL_STATIC_DRAW);
+}
+
 
 void Realtime::settingsChanged() {
     if (!settings.sceneFilePath.empty()) {
@@ -900,6 +1098,15 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
         update();
         return;
     }
+    // Toon shading scene:
+    if (event->key() == Qt::Key_T) {
+        settings.sceneFilePath.clear();
+        settings.fullscreenScene = FullscreenScene::Planet;
+        buildPlanetScene();
+        update();
+        return;
+    }
+
     m_keyMap[Qt::Key(event->key())] = true;
 }
 
@@ -980,7 +1187,7 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Use deltaTime and m_keyMap here to move around
     // Accumulate time for shaders needing iTime
     m_timeSec += deltaTime;
-    const float moveSpeed = 5.0f; // world-space units per second
+    const float moveSpeed = 3.0f; // world-space units per second
     glm::vec3 displacement(0.f);
 
     const glm::vec3 lookDir = glm::normalize(m_camera.getLook());
@@ -1208,6 +1415,18 @@ void Realtime::createOrResizeSceneFBO(int width, int height) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, width, height, 0, GL_RG, GL_HALF_FLOAT, nullptr);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, m_sceneVelocityTex, 0);
 
+    //Normal
+    if (m_sceneNormalTex == 0) glGenTextures(1, &m_sceneNormalTex);
+    glBindTexture(GL_TEXTURE_2D, m_sceneNormalTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0,
+                 GL_RGBA, GL_HALF_FLOAT, nullptr);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
+                           GL_TEXTURE_2D, m_sceneNormalTex, 0);
+
     // Depth
     if (m_sceneDepthTex == 0) glGenTextures(1, &m_sceneDepthTex);
     glBindTexture(GL_TEXTURE_2D, m_sceneDepthTex);
@@ -1218,8 +1437,8 @@ void Realtime::createOrResizeSceneFBO(int width, int height) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_sceneDepthTex, 0);
 
-    GLenum drawBuffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, drawBuffers);
+    GLenum drawBuffers[3] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2 };
+    glDrawBuffers(3, drawBuffers);
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -1234,7 +1453,9 @@ void Realtime::releaseSceneFBO() {
     if (m_sceneColorTex) { glDeleteTextures(1, &m_sceneColorTex); m_sceneColorTex = 0; }
     if (m_sceneDepthTex) { glDeleteTextures(1, &m_sceneDepthTex); m_sceneDepthTex = 0; }
     if (m_sceneVelocityTex) { glDeleteTextures(1, &m_sceneVelocityTex); m_sceneVelocityTex = 0; }
+    if (m_sceneNormalTex)  { glDeleteTextures(1, &m_sceneNormalTex);  m_sceneNormalTex = 0; }
     if (m_sceneFBO) { glDeleteFramebuffers(1, &m_sceneFBO); m_sceneFBO = 0; }
+
     m_fbWidth = m_fbHeight = 0;
 }
 

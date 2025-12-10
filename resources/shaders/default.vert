@@ -16,11 +16,15 @@ out vec3 v_wpos;
 out vec2 v_uv;
 out vec2 v_velocity;
 
+// object-space position (pre M)
+out vec3 v_objPos;
+
 void main() {
     vec4 wpos = u_M * vec4(a_pos, 1.0);
     v_wpos = wpos.xyz;
     v_n = normalize(u_N * a_nor);
     v_uv = a_uv;
+    v_objPos = a_pos;
     vec4 clipCurr = u_P * u_V * wpos;
     vec4 clipPrev = u_prevP * u_prevV * (u_prevM * vec4(a_pos, 1.0));
     vec2 ndcCurr = clipCurr.xy / max(clipCurr.w, 1e-6);
