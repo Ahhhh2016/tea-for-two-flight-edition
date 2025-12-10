@@ -697,6 +697,7 @@ void Realtime::renderPlanetScene() {
     m_prevV = V;
     m_prevP = P;
     for (auto &d : m_draws) d.prevModel = d.model;
+
 }
 
 void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
@@ -889,10 +890,8 @@ void Realtime::renderGeometryScene() {
     glViewport(0, 0, outW, outH);
     glDisable(GL_DEPTH_TEST);
 
-    bool useMotion = settings.extraCredit4 && !m_debugDepth;
-
     // Select post program
-    // bool useMotion = !m_debugDepth && (settings.extraCredit4 || m_sprintBlurUnlocked);
+    bool useMotion = !m_debugDepth && (settings.extraCredit4 || m_sprintBlurUnlocked);
 
     if (m_debugDepth && m_postProgDepth) {
         glUseProgram(m_postProgDepth);
@@ -947,7 +946,12 @@ void Realtime::renderGeometryScene() {
 
 void Realtime::paintGL() {
     SceneRenderMode mode = computeRenderMode();
-
+    std::cout << "[Planet DEBUG] paintGL mode=" << int(mode)
+              << " fullscreenScene=" << int(settings.fullscreenScene)
+              << " sceneFilePath.empty=" << settings.sceneFilePath.empty()
+              << " m_draws=" << m_draws.size()
+              << " m_vertexCount=" << m_vertexCount
+              << std::endl;
     switch (mode) {
 
     case SceneRenderMode::FullscreenProcedural:
@@ -1341,6 +1345,10 @@ void Realtime::buildPlanetScene() {
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
     glBufferData(GL_ARRAY_BUFFER, cpuData.size() * sizeof(float),
                  cpuData.data(), GL_STATIC_DRAW);
+    std::cout << "[Planet DEBUG] buildPlanetScene finished. m_draws="
+              << m_draws.size()
+              << " m_vertexCount=" << m_vertexCount << std::endl;
+
 }
 
 
@@ -1419,9 +1427,31 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
     }
     // Toon shading scene:
     if (event->key() == Qt::Key_T) {
+        std::cout << "[Planet DEBUG] T pressed → Planet mode, building planet scene\n";
         settings.sceneFilePath.clear();
         settings.fullscreenScene = FullscreenScene::Planet;
         buildPlanetScene();
+        {
+            // Put camera a few units above the terrain, looking toward origin
+            m_camera.setPosition(glm::vec3(0.f, 2.5f, 6.f));
+
+            glm::vec3 lookTarget(0.f, 0.f, 0.f);
+            glm::vec3 lookDir = glm::normalize(lookTarget - m_camera.getPosition());
+            m_camera.setLook(lookDir);
+            m_camera.setUp(glm::vec3(0.f, 1.f, 0.f));
+
+            // Make sure clip planes & aspect are sensible
+            m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
+            float aspect = float(size().width() * m_devicePixelRatio) /
+                           float(size().height() * m_devicePixelRatio);
+            m_camera.setAspectRatio(aspect);
+
+            // Also reset the "previous" matrices so motion/velocity isn't garbage
+            m_prevV = m_camera.getViewMatrix();
+            m_prevP = m_camera.getProjectionMatrix();
+        }
+        std::cout << "[Planet DEBUG] after buildPlanetScene: m_draws=" << m_draws.size()
+                  << " m_vertexCount=" << m_vertexCount << std::endl;
         update();
         return;
     }
