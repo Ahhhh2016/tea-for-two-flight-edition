@@ -239,8 +239,23 @@ void Realtime::paintGL() {
                 prog = m_postProgWater;
             }
             if (prog != 0) {
-                bool sprintingIQ = (settings.fullscreenScene == FullscreenScene::IQ) && m_keyMap[Qt::Key_Shift];
-                if (sprintingIQ && m_postProgDirectional && m_fullscreenFBO && m_fullscreenColorTex) {
+                // Compute speed-based blur activation and strength (persists while speed decays)
+                float maxSpeedUI = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
+                float speedFracUI = 0.0f;
+                if (maxSpeedUI > m_moveSpeedBase) {
+                    speedFracUI = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeedUI - m_moveSpeedBase), 1.0f));
+                }
+                // Delayed ramp: 0 for first 2s; ramp 0..1 over 2..4s while holding.
+                // After unlock and on release, use full scale (1.0) with speed-decay persistence.
+                bool shiftDownUI = m_keyMap[Qt::Key_Shift];
+                float blurScaleUI = shiftDownUI ? m_shiftHoldRamp01 : (m_sprintBlurUnlocked ? 1.0f : 0.0f);
+                float blurPixelsUI = 10.0f * speedFracUI * blurScaleUI; // 0..10px scaled by ramp/permit
+                int numSamplesUI = 7 + int(10.0f * speedFracUI * blurScaleUI); // 7..17, ensure odd below
+                if ((numSamplesUI % 2) == 0) numSamplesUI += 1;
+                bool blurActiveIQ = (settings.fullscreenScene == FullscreenScene::IQ) &&
+                                    (blurPixelsUI > 0.0f) &&
+                                    m_postProgDirectional && m_fullscreenFBO && m_fullscreenColorTex;
+                if (blurActiveIQ) {
                     // 1) Render IQ to fullscreen offscreen texture
                     glBindFramebuffer(GL_FRAMEBUFFER, m_fullscreenFBO);
                     glViewport(0, 0, outW, outH);
@@ -301,17 +316,8 @@ void Realtime::paintGL() {
                     if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(outW), 1.0f / float(outH));
                 // Use a simple horizontal blur direction
                 if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
-                // Blur strength scales with current speed relative to base and maximum sprint
-                float maxSpeed = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
-                float speedFrac = 0.0f;
-                if (maxSpeed > m_moveSpeedBase) {
-                    speedFrac = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeed - m_moveSpeedBase), 1.0f));
-                }
-                float blurPixels = 4.0f + 14.0f * speedFrac; // 4..18px
-                int numSamples = 7 + int(10.0f * speedFrac); // 7..17
-                if ((numSamples % 2) == 0) numSamples += 1;  // ensure odd
-                if (locPx  >= 0) glUniform1f(locPx, blurPixels);
-                if (locNS  >= 0) glUniform1i(locNS, numSamples);
+                    if (locPx  >= 0) glUniform1f(locPx, blurPixelsUI);
+                    if (locNS  >= 0) glUniform1i(locNS, numSamplesUI);
                     glActiveTexture(GL_TEXTURE0);
                     glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
                     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -435,8 +441,20 @@ void Realtime::paintGL() {
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
             // 2) Render Scene A (IQ rainforest) then optional sprint blur to screen
-            bool sprintingIQ = m_keyMap[Qt::Key_Shift];
-            if (sprintingIQ && m_postProgDirectional && m_fullscreenFBO && m_fullscreenColorTex) {
+            // Compute speed-based blur activation and strength
+            float maxSpeedPB = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
+            float speedFracPB = 0.0f;
+            if (maxSpeedPB > m_moveSpeedBase) {
+                speedFracPB = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeedPB - m_moveSpeedBase), 1.0f));
+            }
+            bool shiftDownPB = m_keyMap[Qt::Key_Shift];
+            float blurScalePB = shiftDownPB ? m_shiftHoldRamp01 : (m_sprintBlurUnlocked ? 1.0f : 0.0f);
+            float blurPixelsPB = 10.0f * speedFracPB * blurScalePB; // 0..10px, scaled by ramp/permit
+            int numSamplesPB = 7 + int(10.0f * speedFracPB * blurScalePB); // 7..17
+            if ((numSamplesPB % 2) == 0) numSamplesPB += 1;
+            bool blurActiveIQPortal = (blurPixelsPB > 0.0f) &&
+                                      m_postProgDirectional && m_fullscreenFBO && m_fullscreenColorTex;
+            if (blurActiveIQPortal) {
                 // Render IQ to offscreen
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fullscreenFBO);
                 glViewport(0, 0, outW, outH);
@@ -495,16 +513,8 @@ void Realtime::paintGL() {
                 if (locColor >= 0) glUniform1i(locColor, 0);
                 if (locTexel >= 0) glUniform2f(locTexel, 1.0f / float(outW), 1.0f / float(outH));
                 if (locDir >= 0) glUniform2f(locDir, 1.0f, 0.0f);
-                float maxSpeed2 = m_moveSpeedBase * (1.0f + m_sprintAccumMax);
-                float speedFrac2 = 0.0f;
-                if (maxSpeed2 > m_moveSpeedBase) {
-                    speedFrac2 = std::max(0.0f, std::min((m_currentSpeedUnits - m_moveSpeedBase) / (maxSpeed2 - m_moveSpeedBase), 1.0f));
-                }
-                float blurPixels2 = 4.0f + 14.0f * speedFrac2;
-                int numSamples2 = 7 + int(10.0f * speedFrac2);
-                if ((numSamples2 % 2) == 0) numSamples2 += 1;
-                if (locPx  >= 0) glUniform1f(locPx, blurPixels2);
-                if (locNS  >= 0) glUniform1i(locNS, numSamples2);
+                if (locPx  >= 0) glUniform1f(locPx, blurPixelsPB);
+                if (locNS  >= 0) glUniform1i(locNS, numSamplesPB);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_fullscreenColorTex);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -730,8 +740,8 @@ void Realtime::paintGL() {
     }
     glDisable(GL_DEPTH_TEST); // disable depth test for post-processing
 
-    // Select post program
-    bool useMotion = (settings.extraCredit4 || m_keyMap[Qt::Key_Shift]) && !m_debugDepth;
+	// Select post program
+	bool useMotion = !m_debugDepth && (settings.extraCredit4 || m_sprintBlurUnlocked);
     if (m_debugDepth && m_postProgDepth) {
         glUseProgram(m_postProgDepth);
     } else if (useMotion && m_postProgMotion) {
@@ -1228,6 +1238,18 @@ void Realtime::timerEvent(QTimerEvent *event) {
     // Use deltaTime and m_keyMap here to move around
     // Accumulate time for shaders needing iTime
     m_timeSec += deltaTime;
+	// Track Shift hold for gating motion blur
+	if (m_keyMap[Qt::Key_Shift]) {
+		m_shiftHoldSec += deltaTime;
+		if (!m_sprintBlurUnlocked && m_shiftHoldSec >= 2.0f) {
+			m_sprintBlurUnlocked = true;
+		}
+	} else {
+		m_shiftHoldSec = 0.0f;
+	}
+	// Delayed ramp: 0 for first 2 seconds, then ramp 0..1 over next 2 seconds while holding
+	float shiftHeldBeyond2 = m_shiftHoldSec - 2.0f;
+	m_shiftHoldRamp01 = std::max(0.0f, std::min(shiftHeldBeyond2 / 2.0f, 1.0f));
     const float baseSpeed = m_moveSpeedBase; // world-space units per second
     // Sprint accumulation
     if (m_keyMap[Qt::Key_Shift]) {
@@ -1238,6 +1260,10 @@ void Realtime::timerEvent(QTimerEvent *event) {
     m_sprintAccum = std::max(0.0f, std::min(m_sprintAccum, m_sprintAccumMax));
     const float currentSpeed = baseSpeed * (1.0f + m_sprintAccum);
     m_currentSpeedUnits = currentSpeed;
+	// Reset blur unlock once back to base speed (stops persistent blur until next 2s hold)
+	if (m_sprintBlurUnlocked && m_currentSpeedUnits <= (m_moveSpeedBase + 0.01f)) {
+		m_sprintBlurUnlocked = false;
+	}
     glm::vec3 displacement(0.f);
 
     // Route movement to Water camera when Water is the fullscreen scene (no scenefile)
