@@ -181,6 +181,9 @@ void Realtime::initializeGL() {
         m_camera.setPosition(ro);
         m_camera.setLook(look);
         m_camera.setUp(glm::vec3(0.f, 1.f, 0.f));
+        // Keep portal centered at the camera's height so it's visible in front
+        // Facing +Z, located at z=0 like before
+        m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, ro.y, 0.f));
     }
 
     // Initialize previous camera matrices
@@ -238,25 +241,43 @@ void Realtime::paintGL() {
                     float clickY = m_mouseDown ? mouseY : 0.f;
                     glUniform4f(locMouse, mouseX, mouseY, clickX, clickY);
                 }
-                // Camera uniforms for IQ shader (safe if missing)
-                GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
-                GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
-                GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
-                GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
-                GLint locCamTarget = glGetUniformLocation(prog, "u_camTarget");
+                // Camera uniforms: apply only for IQ shader
                 GLint locSunDir = glGetUniformLocation(prog, "u_sunDir");
                 GLint locExposure = glGetUniformLocation(prog, "u_exposure");
-                if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0 || locCamTarget >= 0) {
-                    glm::vec3 camPos  = m_camera.getPosition();
-                    glm::vec3 camLook = m_camera.getLook();
-                    glm::vec3 camUp   = m_camera.getUp();
-                    float fovY        = (prog == m_postProgIQ) ? (2.f * std::atan(1.f / 1.5f)) : m_camera.getFovYRadians();
-                    glm::vec3 camTarget = camPos + glm::normalize(camLook);
-                    if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
-                    if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
-                    if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
-                    if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
-                    if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
+                if (prog == m_postProgIQ) {
+                    GLint locCamPos  = glGetUniformLocation(prog, "u_camPos");
+                    GLint locCamLook = glGetUniformLocation(prog, "u_camLook");
+                    GLint locCamUp   = glGetUniformLocation(prog, "u_camUp");
+                    GLint locFovY    = glGetUniformLocation(prog, "u_camFovY");
+                    GLint locCamTarget = glGetUniformLocation(prog, "u_camTarget");
+                    if (locCamPos >= 0 || locCamLook >= 0 || locCamUp >= 0 || locFovY >= 0 || locCamTarget >= 0) {
+                        glm::vec3 camPos  = m_camera.getPosition();
+                        glm::vec3 camLook = m_camera.getLook();
+                        glm::vec3 camUp   = m_camera.getUp();
+                        float fovY        = 2.f * std::atan(1.f / 1.5f);
+                        glm::vec3 camTarget = camPos + glm::normalize(camLook);
+                        if (locCamPos  >= 0) glUniform3f(locCamPos,  camPos.x,  camPos.y,  camPos.z);
+                        if (locCamLook >= 0) glUniform3f(locCamLook, camLook.x, camLook.y, camLook.z);
+                        if (locCamUp   >= 0) glUniform3f(locCamUp,   camUp.x,   camUp.y,   camUp.z);
+                        if (locFovY    >= 0) glUniform1f(locFovY,    fovY);
+                        if (locCamTarget >= 0) glUniform3f(locCamTarget, camTarget.x, camTarget.y, camTarget.z);
+                    }
+                } else if (prog == m_postProgWater) {
+                    // Provide stable defaults for water camera independent of rainforest changes
+                    GLint locCamPosW  = glGetUniformLocation(prog, "u_camPos");
+                    GLint locCamLookW = glGetUniformLocation(prog, "u_camLook");
+                    GLint locCamUpW   = glGetUniformLocation(prog, "u_camUp");
+                    GLint locFovYW    = glGetUniformLocation(prog, "u_camFovY");
+                    if (locCamPosW >= 0 || locCamLookW >= 0 || locCamUpW >= 0 || locFovYW >= 0) {
+                        const glm::vec3 camPosW(0.f, 1.5f, 4.f);
+                        const glm::vec3 camLookW(0.f, 0.f, -1.f);
+                        const glm::vec3 camUpW(0.f, 1.f, 0.f);
+                        const float fovYW = 1.04719755f; // 60 degrees in radians
+                        if (locCamPosW  >= 0) glUniform3f(locCamPosW,  camPosW.x,  camPosW.y,  camPosW.z);
+                        if (locCamLookW >= 0) glUniform3f(locCamLookW, camLookW.x, camLookW.y, camLookW.z);
+                        if (locCamUpW   >= 0) glUniform3f(locCamUpW,   camUpW.x,   camUpW.y,   camUpW.z);
+                        if (locFovYW    >= 0) glUniform1f(locFovYW,    fovYW);
+                    }
                 }
                 if (locSunDir >= 0) {
                     // Original IQ rainforest sun direction
@@ -292,21 +313,23 @@ void Realtime::paintGL() {
                 float clickY = m_mouseDown ? mouseY : 0.f;
                 glUniform4f(locMouseB, mouseX, mouseY, clickX, clickY);
             }
- 			// Camera uniforms for Water shader (to mirror rainforest controls)
- 			GLint locCamPosB  = glGetUniformLocation(m_postProgWater, "u_camPos");
- 			GLint locCamLookB = glGetUniformLocation(m_postProgWater, "u_camLook");
- 			GLint locCamUpB   = glGetUniformLocation(m_postProgWater, "u_camUp");
- 			GLint locFovYB    = glGetUniformLocation(m_postProgWater, "u_camFovY");
- 			if (locCamPosB >= 0 || locCamLookB >= 0 || locCamUpB >= 0 || locFovYB >= 0) {
- 				glm::vec3 camPos  = m_camera.getPosition();
- 				glm::vec3 camLook = m_camera.getLook();
- 				glm::vec3 camUp   = m_camera.getUp();
- 				float fovY        = m_camera.getFovYRadians();
- 				if (locCamPosB  >= 0) glUniform3f(locCamPosB,  camPos.x,  camPos.y,  camPos.z);
- 				if (locCamLookB >= 0) glUniform3f(locCamLookB, camLook.x, camLook.y, camLook.z);
- 				if (locCamUpB   >= 0) glUniform3f(locCamUpB,   camUp.x,   camUp.y,   camUp.z);
- 				if (locFovYB    >= 0) glUniform1f(locFovYB,    fovY);
- 			}
+			// Stable camera defaults for Water in portal
+            {
+                GLint locCamPosW  = glGetUniformLocation(m_postProgWater, "u_camPos");
+                GLint locCamLookW = glGetUniformLocation(m_postProgWater, "u_camLook");
+                GLint locCamUpW   = glGetUniformLocation(m_postProgWater, "u_camUp");
+                GLint locFovYW    = glGetUniformLocation(m_postProgWater, "u_camFovY");
+                if (locCamPosW >= 0 || locCamLookW >= 0 || locCamUpW >= 0 || locFovYW >= 0) {
+                    const glm::vec3 camPosW(0.f, 1.5f, 4.f);
+                    const glm::vec3 camLookW(0.f, 0.f, -1.f);
+                    const glm::vec3 camUpW(0.f, 1.f, 0.f);
+                    const float fovYW = 1.04719755f; // 60 degrees in radians
+                    if (locCamPosW  >= 0) glUniform3f(locCamPosW,  camPosW.x,  camPosW.y,  camPosW.z);
+                    if (locCamLookW >= 0) glUniform3f(locCamLookW, camLookW.x, camLookW.y, camLookW.z);
+                    if (locCamUpW   >= 0) glUniform3f(locCamUpW,   camUpW.x,   camUpW.y,   camUpW.z);
+                    if (locFovYW    >= 0) glUniform1f(locFovYW,    fovYW);
+                }
+            }
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
             // 2) Render Scene A (IQ rainforest) to screen
