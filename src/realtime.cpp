@@ -458,6 +458,41 @@ void Realtime::renderFullscreenProcedural(){
                         glUniform1f(locExposure, 1.0f);
                     }
                     glDrawArrays(GL_TRIANGLES, 0, 6);
+                    // If we're in Water and portal is enabled, composite a simple portal quad on top
+                    if (settings.fullscreenScene == FullscreenScene::Water &&
+                        m_portalEnabled &&
+                        m_portalProg != 0 && m_portalVAO != 0 &&
+                        m_portalFBO != 0 && m_portalColorTex != 0) {
+                        // Ensure portal texture has content: clear portal FBO to a distinct color
+                        glBindFramebuffer(GL_FRAMEBUFFER, m_portalFBO);
+                        glViewport(0, 0, m_portalWidth, m_portalHeight);
+                        const float portalC[4] = {0.2f, 0.0f, 0.4f, 1.0f}; // purple tint placeholder
+                        glClearBufferfv(GL_COLOR, 0, portalC);
+                        // Back to default framebuffer
+                        glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFBO));
+                        if (prevFBO == 0) {
+                            glViewport(0, 0, outW, outH);
+                        }
+                        // Draw portal quad in world-space using Water camera matrices
+                        glEnable(GL_BLEND);
+                        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                        glUseProgram(m_portalProg);
+                        GLint locSamp = glGetUniformLocation(m_portalProg, "u_portalTex");
+                        GLint locAlpha = glGetUniformLocation(m_portalProg, "u_alpha");
+                        GLint locM = glGetUniformLocation(m_portalProg, "u_M");
+                        GLint locV = glGetUniformLocation(m_portalProg, "u_V");
+                        GLint locP = glGetUniformLocation(m_portalProg, "u_P");
+                        if (locSamp >= 0) glUniform1i(locSamp, 0);
+                        if (locAlpha >= 0) glUniform1f(locAlpha, 1.0f);
+                        if (locM >= 0) glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(m_portalModel));
+                        if (locV >= 0) glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(m_cameraWater.getViewMatrix()));
+                        if (locP >= 0) glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(m_cameraWater.getProjectionMatrix()));
+                        glActiveTexture(GL_TEXTURE0);
+                        glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
+                        glBindVertexArray(m_portalVAO);
+                        glDrawArrays(GL_TRIANGLES, 0, 6);
+                        glDisable(GL_BLEND);
+                    }
                     m_frameCount++;
                     return;
                 }
@@ -1414,16 +1449,42 @@ void Realtime::keyPressEvent(QKeyEvent *event) {
         update();
         return;
     }
-    // Toggle fullscreen scene on 'P' (swap IQ <-> Water)
+    // 'P' → In Water scene: toggle/show portal for Water → Planet
+    // Otherwise keep existing IQ<->Water toggle
     if (event->key() == Qt::Key_P) {
-        if (settings.fullscreenScene == FullscreenScene::IQ) {
-            settings.fullscreenScene = FullscreenScene::Water;
-            glm::vec3 p = m_camera.getPosition();
+        if (settings.fullscreenScene == FullscreenScene::Water) {
+            // Toggle portal visibility and place in front of Water camera
+            m_portalEnabled = !m_portalEnabled;
+            m_portalAutoCenterY = false; // fixed placement when toggled
+            if (m_portalEnabled) {
+                // Place some units ahead of water camera, aligned with its height
+                const glm::vec3 camPos  = m_cameraWater.getPosition();
+                const glm::vec3 camLook = glm::normalize(m_cameraWater.getLook());
+                const float placeDist = 3.0f;
+                const glm::vec3 portalPos = camPos + camLook * placeDist;
+                glm::mat4 M(1.f);
+                // Face the camera: build yaw to face opposite of camera look on XZ
+                glm::vec3 fwdXZ = glm::normalize(glm::vec3(camLook.x, 0.f, camLook.z));
+                float yaw = std::atan2(fwdXZ.x, fwdXZ.z); // rotate around +Y
+                M = glm::translate(M, glm::vec3(portalPos.x, camPos.y, portalPos.z));
+                M = glm::rotate(M, yaw, glm::vec3(0.f, 1.f, 0.f));
+                m_portalModel = M;
+                // Reset traversal depth when showing
+                m_portalDepth = m_portalDepthMax;
+            }
+            update();
+            return;
         } else {
-            settings.fullscreenScene = FullscreenScene::IQ;
+            // Preserve old behavior: P toggles IQ <-> Water when not in Water
+            if (settings.fullscreenScene == FullscreenScene::IQ) {
+                settings.fullscreenScene = FullscreenScene::Water;
+                glm::vec3 p = m_camera.getPosition();
+            } else {
+                settings.fullscreenScene = FullscreenScene::IQ;
+            }
+            update();
+            return;
         }
-        update();
-        return;
     }
     // Toon shading scene:
     if (event->key() == Qt::Key_T) {
@@ -1673,15 +1734,34 @@ void Realtime::timerEvent(QTimerEvent *event) {
                 m_portalDepth = std::min(m_portalDepthMax, m_portalDepth + baseSpeed * 0.75f * deltaTime);
 			}
 		}
-		// Walk "back" from Water to IQ (use same rect and S key)
+		// Walk from Water into Planet: hold W while looking at the portal
 		else if (settings.sceneFilePath.empty() &&
 				 settings.fullscreenScene == FullscreenScene::Water) {
-			if (insidePortalRect && m_keyMap[Qt::Key_S] && cooldownReady) {
+			if (insidePortalRect && m_keyMap[Qt::Key_W] && cooldownReady && m_portalEnabled) {
 				m_portalDepth -= currentSpeed * deltaTime;
 				if (m_portalDepth <= 0.f) {
-					settings.fullscreenScene = FullscreenScene::IQ;
+                    // Switch to Planet scene and build it
+                    settings.sceneFilePath.clear();
+                    settings.fullscreenScene = FullscreenScene::Planet;
+                    buildPlanetScene();
+                    // Set a reasonable camera for planet scene
+                    m_camera.setPosition(glm::vec3(0.f, 2.5f, 6.f));
+                    {
+                        glm::vec3 lookTarget(0.f, 0.f, 0.f);
+                        glm::vec3 lookDir = glm::normalize(lookTarget - m_camera.getPosition());
+                        m_camera.setLook(lookDir);
+                        m_camera.setUp(glm::vec3(0.f, 1.f, 0.f));
+                        m_camera.setClipPlanes(settings.nearPlane, settings.farPlane);
+                        float aspect = float(size().width() * m_devicePixelRatio) /
+                                       float(size().height() * m_devicePixelRatio);
+                        m_camera.setAspectRatio(aspect);
+                        m_prevV = m_camera.getViewMatrix();
+                        m_prevP = m_camera.getProjectionMatrix();
+                    }
+                    // Reset portal state/cooldown
 					m_portalDepth = m_portalDepthMax;
 					m_portalCooldownTimer = m_portalCooldownSec;
+                    m_portalEnabled = false; // hide portal after traversal
 					update();
 					return;
 				}
