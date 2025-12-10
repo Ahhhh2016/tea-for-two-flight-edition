@@ -93,6 +93,18 @@ void Realtime::finish() {
         glDeleteTextures(1, &m_skyTex);
         m_skyTex = 0;
     }
+    if (m_shadowDepthTex) {
+        glDeleteTextures(1, &m_shadowDepthTex);
+        m_shadowDepthTex = 0;
+    }
+    if (m_shadowFBO) {
+        glDeleteFramebuffers(1, &m_shadowFBO);
+        m_shadowFBO = 0;
+    }
+    if (m_shadowShader) {
+        glDeleteProgram(m_shadowShader);
+        m_shadowShader = 0;
+    }
     releasePortalQuad();
     releasePortalFBO();
 
@@ -164,6 +176,12 @@ void Realtime::initializeGL() {
             ":/resources/shaders/post.vert",
             ":/resources/shaders/toon.frag"
             );
+        // Shadow
+        m_shadowShader = ShaderLoader::createShaderProgram(
+            ":/resources/shaders/shadow.vert",
+            ":/resources/shaders/shadow.frag"
+            );
+
     } catch (const std::exception &e) {
         std::cerr << "Shader error: " << e.what() << std::endl;
         if (m_prog == 0) m_prog = 0;
@@ -225,6 +243,7 @@ void Realtime::initializeGL() {
     createPortalQuad();
     createOrResizePortalFBO(fbw, fbh);
     createOrResizeFullscreenFBO(fbw, fbh);
+    makeShadowMapFBO();
 	// Place portal in world: at y=1.2, z=0 facing +Z (camera starts at z=5 looking -Z)
 	m_portalModel = glm::translate(glm::mat4(1.f), glm::vec3(0.f, 1.2f, 0.f));
     // Lift camera slightly at start to avoid Water-in-portal artifacts when too low
@@ -256,6 +275,181 @@ void Realtime::initializeGL() {
     m_timeSec = 0.f;
     m_frameCount = 0;
 }
+void Realtime::makeShadowMapFBO() {
+    if (m_shadowFBO == 0) {
+        glGenFramebuffers(1, &m_shadowFBO);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
+
+    if (m_shadowDepthTex == 0) {
+        glGenTextures(1, &m_shadowDepthTex);
+    }
+    glBindTexture(GL_TEXTURE_2D, m_shadowDepthTex);
+
+    glTexImage2D(GL_TEXTURE_2D,
+                 0,
+                 GL_DEPTH_COMPONENT24,        // internal format
+                 m_shadowRes,
+                 m_shadowRes,
+                 0,
+                 GL_DEPTH_COMPONENT,          // format
+                 GL_FLOAT,                    // type
+                 nullptr);
+
+    // Tutorial-style sampler params
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    // Very important for shadow edges
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderCol[4] = {1.f, 1.f, 1.f, 1.f};
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderCol);
+
+    // Attach as depth-only FBO
+    glFramebufferTexture2D(GL_FRAMEBUFFER,
+                           GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D,
+                           m_shadowDepthTex,
+                           0);
+
+    // No color buffer
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        std::cerr << "Shadow FBO incomplete: 0x"
+                  << std::hex << status << std::dec << std::endl;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+void Realtime::updateShadowLightSelection() {
+    m_hasShadowLight = false;
+    m_shadowLightIndex = -1;
+
+    // Simple: pick the first directional light
+    for (int i = 0; i < (int)m_render.lights.size(); ++i) {
+        const auto &L = m_render.lights[i];
+        if (L.type == LightType::LIGHT_DIRECTIONAL) {
+            m_hasShadowLight = true;
+            m_shadowLightIndex = i;
+            return;
+        }
+    }
+
+    // Fallback: if no directional, you could pick any light or just leave it off
+    if (!m_render.lights.empty()) {
+        m_hasShadowLight = true;
+        m_shadowLightIndex = 0;
+    }
+}
+void Realtime::updateLightViewProj() {
+    if (!m_hasShadowLight ||
+        m_shadowLightIndex < 0 ||
+        m_shadowLightIndex >= (int)m_render.lights.size()) {
+        return;
+    }
+
+    const SceneLightData &L = m_render.lights[m_shadowLightIndex];
+
+    // Use the light direction to build a view matrix.
+    glm::vec3 lightDir = glm::normalize(glm::vec3(L.dir));
+    if (glm::length(lightDir) < 1e-4f) {
+        lightDir = glm::normalize(glm::vec3(0.3f, -1.0f, 0.2f));
+    }
+
+    // Place light some distance "upstream" along this direction.
+    glm::vec3 target(0.f, 0.f, 0.f);      // focus around origin / terrain region
+    glm::vec3 lightPos = target - lightDir * 30.0f;
+
+    glm::mat4 lightView = glm::lookAt(lightPos,
+                                      target,
+                                      glm::vec3(0.f, 1.f, 0.f));
+
+    // Orthographic frustum that covers your planet/terrain region
+    float orthoSize = 25.0f;
+    float nearPlane = 1.0f;
+    float farPlane  = 80.0f;
+
+    glm::mat4 lightProj = glm::ortho(-orthoSize, orthoSize,
+                                     -orthoSize, orthoSize,
+                                     nearPlane,  farPlane);
+
+    m_lightViewProj = lightProj * lightView;
+}
+
+void Realtime::renderShadowMap() {
+    if (!m_hasShadowLight) return;
+    if (m_shadowShader == 0 || m_shadowFBO == 0 || m_shadowDepthTex == 0) return;
+
+    // Save state
+    GLint prevFBO = 0;
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
+
+    GLint prevViewport[4];
+    glGetIntegerv(GL_VIEWPORT, prevViewport);
+
+    GLint prevProgram = 0;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
+
+    // --- Shadow pass ---
+    glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
+    glViewport(0, 0, m_shadowRes, m_shadowRes);
+
+    glEnable(GL_DEPTH_TEST);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    glUseProgram(m_shadowShader);
+
+    // Uniform locations
+    GLint locM          = glGetUniformLocation(m_shadowShader, "u_M");
+    GLint locLightVP    = glGetUniformLocation(m_shadowShader, "u_lightViewProj");
+    GLint locTime       = glGetUniformLocation(m_shadowShader, "u_time");
+
+    GLint locIsMoon     = glGetUniformLocation(m_shadowShader, "u_isMoon");
+    GLint locMoonCenter = glGetUniformLocation(m_shadowShader, "u_moonCenter");
+    GLint locOrbitSpeed = glGetUniformLocation(m_shadowShader, "u_orbitSpeed");
+    GLint locOrbitPhase = glGetUniformLocation(m_shadowShader, "u_orbitPhase");
+
+    GLint locIsCube     = glGetUniformLocation(m_shadowShader, "u_isFloatingCube");
+    GLint locFloatSpeed = glGetUniformLocation(m_shadowShader, "u_floatSpeed");
+    GLint locFloatAmp   = glGetUniformLocation(m_shadowShader, "u_floatAmp");
+    GLint locFloatPhase = glGetUniformLocation(m_shadowShader, "u_floatPhase");
+
+    // Global uniforms
+    if (locLightVP >= 0) glUniformMatrix4fv(
+            locLightVP, 1, GL_FALSE, glm::value_ptr(m_lightViewProj));
+    if (locTime >= 0)    glUniform1f(locTime, m_timeSec);
+
+    glBindVertexArray(m_vao);
+
+    for (const DrawItem &d : m_draws) {
+        if (locM >= 0) glUniformMatrix4fv(
+                locM, 1, GL_FALSE, glm::value_ptr(d.model));
+
+        if (locIsMoon >= 0)     glUniform1i(locIsMoon, d.isMoon);
+        if (locMoonCenter >= 0) glUniform3fv(locMoonCenter, 1, glm::value_ptr(d.moonCenter));
+        if (locOrbitSpeed >= 0) glUniform1f(locOrbitSpeed, d.orbitSpeed);
+        if (locOrbitPhase >= 0) glUniform1f(locOrbitPhase, d.orbitPhase);
+
+        if (locIsCube >= 0)     glUniform1i(locIsCube, d.isFloatingCube);
+        if (locFloatSpeed >= 0) glUniform1f(locFloatSpeed, d.floatSpeed);
+        if (locFloatAmp >= 0)   glUniform1f(locFloatAmp,   d.floatAmp);
+        if (locFloatPhase >= 0) glUniform1f(locFloatPhase, d.floatPhase);
+
+        glDrawArrays(GL_TRIANGLES, d.first, d.count);
+    }
+
+    glBindVertexArray(0);
+
+    // Restore state
+    glUseProgram(prevProgram);
+    glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
+    glViewport(prevViewport[0], prevViewport[1],
+               prevViewport[2], prevViewport[3]);
+}
+
 
 SceneRenderMode Realtime::computeRenderMode() const {
     // Fullscreen IQ or Water → procedural shader
@@ -477,11 +671,23 @@ void Realtime::renderFullscreenProcedural(){
                         GLint locM = glGetUniformLocation(m_portalProg, "u_M");
                         GLint locV = glGetUniformLocation(m_portalProg, "u_V");
                         GLint locP = glGetUniformLocation(m_portalProg, "u_P");
+
+                        GLint locTime      = glGetUniformLocation(m_portalProg, "u_time");
+                        GLint locRadius    = glGetUniformLocation(m_portalProg, "u_radius");
+                        GLint locEdgeWidth = glGetUniformLocation(m_portalProg, "u_edgeWidth");
+                        GLint locEdgeColor = glGetUniformLocation(m_portalProg, "u_edgeColor");
+
                         if (locSamp >= 0) glUniform1i(locSamp, 0);
                         if (locAlpha >= 0) glUniform1f(locAlpha, 1.0f);
                         if (locM >= 0) glUniformMatrix4fv(locM, 1, GL_FALSE, glm::value_ptr(m_portalModel));
                         if (locV >= 0) glUniformMatrix4fv(locV, 1, GL_FALSE, glm::value_ptr(m_cameraWater.getViewMatrix()));
                         if (locP >= 0) glUniformMatrix4fv(locP, 1, GL_FALSE, glm::value_ptr(m_cameraWater.getProjectionMatrix()));
+
+                        if (locTime      >= 0) glUniform1f (locTime,      m_timeSec);
+                        if (locRadius    >= 0) glUniform1f (locRadius,    0.8f);
+                        if (locEdgeWidth >= 0) glUniform1f (locEdgeWidth, 0.08f);
+                        if (locEdgeColor >= 0) glUniform3f (locEdgeColor, 0.5f, 0.9f, 1.2f);
+
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D, m_portalColorTex);
                         glBindVertexArray(m_portalVAO);
@@ -695,6 +901,11 @@ void Realtime::renderPlanetScene() {
     GLint prevFBO;
     glm::mat4 V, P;
 
+    // --- Shadow setup (Planet only) ---
+    updateShadowLightSelection();
+    updateLightViewProj();
+    renderShadowMap();   // fills m_shadowDepthTex
+
     // 1. Geometry Pass (shared)
     runGeometryPass(prevFBO, V, P);
 
@@ -763,6 +974,9 @@ void Realtime::renderPlanetIntoPortalFBO() {
     // Geometry pass renders to m_sceneFBO at m_fbWidth x m_fbHeight
     glm::mat4 V, P;
     {
+        updateShadowLightSelection();
+        updateLightViewProj();
+        renderShadowMap();
         GLint ignoredPrev;
         runGeometryPass(ignoredPrev, V, P);
     }
@@ -884,6 +1098,15 @@ void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
     GLint uPlanetColorB = glGetUniformLocation(m_prog, "u_planetColorB");
     GLint uIsSand   = glGetUniformLocation(m_prog, "u_isSand");
 
+    GLint uIsMoon      = glGetUniformLocation(m_prog, "u_isMoon");
+    GLint uMoonCenter  = glGetUniformLocation(m_prog, "u_moonCenter");
+    GLint uOrbitSpeed  = glGetUniformLocation(m_prog, "u_orbitSpeed");
+    GLint uOrbitPhase  = glGetUniformLocation(m_prog, "u_orbitPhase");
+    GLint uIsCube      = glGetUniformLocation(m_prog, "u_isFloatingCube");
+    GLint uFloatSpeed  = glGetUniformLocation(m_prog, "u_floatSpeed");
+    GLint uFloatAmp    = glGetUniformLocation(m_prog, "u_floatAmp");
+    GLint uFloatPhase  = glGetUniformLocation(m_prog, "u_floatPhase");
+
     if (uTime >= 0) glUniform1f(uTime, m_timeSec);
 
     glUniformMatrix4fv(uV, 1, GL_FALSE, glm::value_ptr(V));
@@ -955,6 +1178,30 @@ void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
     glUniform1fv(uLightAngle0, n, angles);
     glUniform1fv(uLightPenumbra0, n, pens);
 
+    // Shadow uniforms (only in Planet fullscreen mode)
+    bool planetMode = settings.sceneFilePath.empty() &&
+                      (settings.fullscreenScene == FullscreenScene::Planet);
+
+    GLint uUseShadow        = glGetUniformLocation(m_prog, "u_useShadows");
+    GLint uShadowLightIndex = glGetUniformLocation(m_prog, "u_shadowLightIndex");
+    GLint uLightVP          = glGetUniformLocation(m_prog, "u_lightViewProj");
+    GLint uShadowMap        = glGetUniformLocation(m_prog, "u_shadowMap");
+
+    if (planetMode && m_hasShadowLight && m_shadowDepthTex != 0) {
+        if (uUseShadow        >= 0) glUniform1i(uUseShadow, 1);
+        if (uShadowLightIndex >= 0) glUniform1i(uShadowLightIndex, m_shadowLightIndex);
+        if (uLightVP          >= 0) glUniformMatrix4fv(
+                uLightVP, 1, GL_FALSE,
+                glm::value_ptr(m_lightViewProj));
+        if (uShadowMap        >= 0) {
+            glActiveTexture(GL_TEXTURE4);   // use texture unit 4 for shadow map
+            glBindTexture(GL_TEXTURE_2D, m_shadowDepthTex);
+            glUniform1i(uShadowMap, 4);
+        }
+    } else {
+        if (uUseShadow >= 0) glUniform1i(uUseShadow, 0);
+    }
+
     for (const auto &d : m_draws) {
 
         glUniformMatrix4fv(uM, 1, GL_FALSE, glm::value_ptr(d.model));
@@ -963,6 +1210,17 @@ void Realtime::runGeometryPass(GLint &prevFBO, glm::mat4 &V, glm::mat4 &P) {
 
         if (uIsPlanet >= 0) glUniform1i(uIsPlanet, d.isPlanet);
         if (uIsSand >= 0)   glUniform1i(uIsSand,   d.isSand);
+
+        // per-object:
+        if (uIsMoon >= 0)     glUniform1i(uIsMoon, d.isMoon);
+        if (uMoonCenter >= 0) glUniform3fv(uMoonCenter, 1, glm::value_ptr(d.moonCenter));
+        if (uOrbitSpeed >= 0) glUniform1f(uOrbitSpeed, d.orbitSpeed);
+        if (uOrbitPhase >= 0) glUniform1f(uOrbitPhase, d.orbitPhase);
+
+        if (uIsCube >= 0)     glUniform1i(uIsCube, d.isFloatingCube);
+        if (uFloatSpeed >= 0) glUniform1f(uFloatSpeed, d.floatSpeed);
+        if (uFloatAmp >= 0)   glUniform1f(uFloatAmp, d.floatAmp);
+        if (uFloatPhase >= 0) glUniform1f(uFloatPhase, d.floatPhase);
 
         if (d.isPlanet) {
             if (uPlanetColorA >= 0) glUniform3fv(uPlanetColorA, 1, glm::value_ptr(d.planetColorA));
@@ -1293,6 +1551,7 @@ void Realtime::rebuildGeometryFromRenderData() {
 }
 void Realtime::buildPlanetScene() {
     m_draws.clear();
+    m_render.lights.clear();
     // Reasonable default globals
     m_render.globalData.ka = 0.1f;
     m_render.globalData.kd = 1.0f;
@@ -1444,8 +1703,147 @@ void Realtime::buildPlanetScene() {
         glm::vec3(0.6f, 0.7f, 0.8f),
         glm::vec3(1.0f, 1.0f, 1.0f)
         ));
+
+    glm::vec3 bigPlanetCenter = glm::vec3(-1.5f, 2.0f, -3.0f);
+    glm::vec3 bigPlanetCenter1 = glm::vec3(0.f, 0.6f, 1.f);
+    // Moon 1
+    DrawItem moon1 = makePlanet(
+        bigPlanetCenter + glm::vec3(4.f, 0.f, 0.0f), // initial position
+        0.25f,
+        glm::vec3(0.8f, 0.8f, 1.f),
+        glm::vec3(1.f, 1.f, 1.f)
+        );
+    moon1.isMoon      = true;
+    moon1.moonCenter  = bigPlanetCenter;
+    moon1.orbitSpeed  = 0.8f; // radians per second
+    moon1.orbitPhase  = 0.0f;
+    m_draws.push_back(moon1);
+
+    // Moon 2
+    DrawItem moon2 = makePlanet(
+        bigPlanetCenter1 + glm::vec3(-1.0f, -0.5f, 0.8f),
+        0.18f,
+        glm::vec3(0.25f, 0.18f, 0.20f),
+        glm::vec3(0.95f, 0.85f, 0.9f)
+        );
+    moon2.isMoon      = true;
+    moon2.moonCenter  = bigPlanetCenter;
+    moon2.orbitSpeed  = -1.5f;  // negative = opposite direction
+    moon2.orbitPhase  = 1.7f;   // start elsewhere
+    m_draws.push_back(moon2);
+
+    // Ring of distant small planets around the horizon
+    std::vector<glm::vec3> ringDark = {
+        {0.20f, 0.10f, 0.30f},
+        {0.05f, 0.25f, 0.30f},
+        {0.25f, 0.15f, 0.05f},
+        {0.15f, 0.20f, 0.25f}
+    };
+    std::vector<glm::vec3> ringLight = {
+        {0.90f, 0.60f, 1.00f},
+        {0.70f, 0.90f, 1.00f},
+        {1.00f, 0.85f, 0.40f},
+        {0.95f, 0.95f, 0.95f}
+    };
+
+    int numRingPlanets = 30;
+    float ringDist     = 7.0f;
+    float ringHeight   = 1.6f;
+
+    for (int i = 0; i < numRingPlanets; ++i) {
+        float t   = float(i) / float(numRingPlanets);
+        float ang = glm::two_pi<float>() * t;
+
+        // Position on a horizontal circle around origin
+        glm::vec3 pos(
+            std::cos(ang) * ringDist,
+            ringHeight, // small vertical wobble
+            std::sin(ang) * ringDist
+            );
+
+        float radius = 0.25f + 0.05f * std::sin(ang * 3.0f);
+
+        glm::vec3 colA = ringDark[i % ringDark.size()];
+        glm::vec3 colB = ringLight[i % ringLight.size()];
+
+        DrawItem p = makePlanet(pos, radius, colA, colB);
+        p.isFloatingCube = true;
+        p.floatAmp       = 0.6f; // how high it moves
+        p.floatSpeed     = 0.8f; // how fast it moves
+        p.floatPhase     = ang;
+
+        m_draws.push_back(p);
+    }
+
+
+    // Cube primitive for floating boxes
+    auto cubeGen = ShapeFactory::create(PrimitiveType::PRIMITIVE_CUBE);
+    cubeGen->updateParams(1, 1); // params often ignored for cubes
+    auto cubeData = cubeGen->generateShape();
+
+    int cubeFirst = sphereFirst + sphereCount;
+    int cubeCount = cubeData.size() / 8;
+    cpuData.insert(cpuData.end(), cubeData.begin(), cubeData.end());
+
+    // Update total vertex count
+    m_vertexCount = cubeFirst + cubeCount;
+
+    auto makeFloatingCube = [&](glm::vec3 pos,
+                                glm::vec3 scale,
+                                glm::vec3 kd,
+                                float floatSpeed,
+                                float floatAmp,
+                                float floatPhase) -> DrawItem {
+        DrawItem c{};
+        c.first = cubeFirst;
+        c.count = cubeCount;
+
+        glm::mat4 SM =
+            glm::translate(glm::mat4(1.f), pos) *
+            glm::scale(glm::mat4(1.f), scale);
+
+        c.model     = SM;
+        c.invModel  = glm::inverse(SM);
+        c.normalMat = glm::mat3(glm::transpose(c.invModel));
+        c.prevModel = c.model;
+
+        c.kd = kd;
+        c.ka = kd * 0.3f;
+        c.ks = glm::vec3(0.05f);
+        c.shininess = 8.f;
+
+        c.isPlanet       = false;
+        c.isSand         = false;
+        c.isFloatingCube = true;
+        c.floatSpeed     = floatSpeed;
+        c.floatAmp       = floatAmp;
+        c.floatPhase     = floatPhase;
+        return c;
+    };
+    // scatter 30 cubes over the terrain
+    int numCubes = 30;
+    for (int i = 0; i < numCubes; ++i) {
+        float fx = ((i % 5) - 2) * 3.0f;
+        float fz = ((i / 5) - 2) * 3.0f;
+
+        glm::vec3 pos(
+            fx,
+            -1.0f + 0.4f * ((i % 3) - 1), // roughly above ground
+            fz
+            );
+
+        glm::vec3 scale(0.2f, 0.2f, 0.2f);
+
+        float speed = 0.3f + 0.1f * i;           // slightly different per cube
+        float amp   = 0.4f + 0.05f * (i % 4);
+        float phase = 1.3f * i;
+
+        glm::vec3 kd(0.4f, 0.2f, 0.05f);
+
+        m_draws.push_back(makeFloatingCube(pos, scale, kd, speed, amp, phase));
+    }
+
     // -------- Upload to GPU --------
-    m_vertexCount = sphereFirst + sphereCount;
 
     glBindVertexArray(m_vao);
     glBindBuffer(GL_ARRAY_BUFFER, m_vbo);

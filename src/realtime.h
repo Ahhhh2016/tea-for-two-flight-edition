@@ -89,6 +89,16 @@ private:
         // Planet scene
         bool isPlanet = false;
         bool isSand = false;
+        bool isMoon = false;
+        bool isFloatingCube = false;
+        glm::vec3 moonCenter   = glm::vec3(0.0f); // orbit center
+        float     orbitSpeed   = 0.0f; // radians/sec
+        float     orbitPhase   = 0.0f; // initial angle
+
+        float     floatSpeed   = 0.0f;  // bobbing speed
+        float     floatAmp     = 0.0f;  // bobbing amplitude
+        float     floatPhase   = 0.0f;
+
         glm::vec3 planetColorA; //light band color
         glm::vec3 planetColorB; //dark band color
     };
@@ -115,6 +125,19 @@ private:
     GLuint m_sceneVelocityTex = 0;
     GLuint m_sceneNormalTex = 0;
     GLuint m_skyTex = 0;
+
+    //Shadow mapping
+    GLuint m_shadowFBO        = 0;
+    GLuint m_shadowDepthTex   = 0;
+    GLuint m_shadowShader     = 0;
+    int    m_shadowRes        = 4096;
+    bool   m_hasShadowLight   = false;
+    int    m_shadowLightIndex = -1;
+    glm::mat4 m_lightViewProj = glm::mat4(1.0f);
+    void makeShadowMapFBO();
+    void updateShadowLightSelection();
+    void updateLightViewProj();
+    void renderShadowMap();
 
     // Screen-quad for post-processing
     GLuint m_postProg = 0;          // DoF

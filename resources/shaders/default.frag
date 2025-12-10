@@ -4,6 +4,7 @@ in vec3 v_wpos;
 in vec2 v_uv;
 in vec2 v_velocity;
 in vec3 v_objPos;
+in vec4 v_lightSpacePos;
 
 const int MAX_LIGHTS = 8;
 
@@ -28,6 +29,10 @@ uniform vec3 u_camPos;
 uniform vec3 u_fogColor;
 uniform float u_fogDensity; // use exp2 fog: factor = 1 - exp(-(density * dist)^2)
 uniform int u_fogEnable;
+
+// Shadow mapping
+uniform sampler2D u_shadowMap;
+uniform int u_useShadows;
 
 // Texture mapping
 uniform sampler2D u_tex;
@@ -164,6 +169,44 @@ float dunePattern(vec3 objPos) {
     // cval already normalizes p internally
     float v = cval(p);     // ~0..1-ish
     return clamp(v, 0.0, 1.0);
+}
+
+float computeShadow(vec4 lightSpacePos, vec3 normal, vec3 lightDir) {
+    // Perspective divide
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    // Transform from NDC [-1,1] to [0,1]
+    projCoords = projCoords * 0.5 + 0.5;
+
+    // If outside light frustum, treat as unshadowed
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0 ||
+        projCoords.z < 0.0 || projCoords.z > 1.0) {
+        return 1.0;
+    }
+
+    // Depth from this fragment in light space (0..1)
+    float currentDepth = projCoords.z;
+
+    // Bias to avoid shadow acne (angle-dependent)
+    float bias = max(0.002 * (1.0 - dot(normal, lightDir)), 0.0005);
+
+    // Simple 3x3 PCF
+    vec2 texelSize = 1.0 / vec2(textureSize(u_shadowMap, 0));
+    float result = 0.0;
+    int samples = 0;
+
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            vec2 offset = vec2(x, y) * texelSize;
+            float closestDepth = texture(u_shadowMap, projCoords.xy + offset).r;
+            // If current depth is farther than stored depth -> in shadow
+            result += (currentDepth - bias > closestDepth) ? 0.0 : 1.0;
+            samples++;
+        }
+    }
+
+    return result / float(samples);
 }
 
 void main() {
@@ -324,8 +367,19 @@ void main() {
                 float RdotV = max(dot(R, V), 0.0);
                 float specPow = (u_shininess <= 0.0) ? 0.0 : pow(RdotV, u_shininess);
                 vec3 specular = u_global.z * u_ks * specPow;
+                // Shadow fogFactor
+                float shadow = 1.0;
+                if (u_useShadows == 1 && u_lightType[i] == 0) {
+                    // L is the light direction from fragment to light
+                    shadow = computeShadow(v_lightSpacePos, n, L);
+                }
+                float minShadow = 0.3;
+                float shadowFactor = mix(minShadow, 1.0, shadow);
 
-                vec3 lightContribution = (diffuse + specular) * u_lightColor[i] * attenuation * spotFactor;
+                vec3 lightContribution =
+                    (diffuse + specular) * u_lightColor[i] * attenuation * spotFactor * shadowFactor;
+
+                // vec3 lightContribution = (diffuse + specular) * u_lightColor[i] * attenuation * spotFactor;
                 color += lightContribution;
             }
         }
