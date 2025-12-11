@@ -194,7 +194,7 @@ void Realtime::initializeGL() {
         if (m_portalProg == 0) m_portalProg = 0;
         if (m_postProgToon == 0) m_postProgToon = 0;
     }
-    // --- Load sky texture for Planet/Toon mode ---
+    // Load sky texture for Planet/Toon mode
     {
         QImage img(":/resources/images/sky1.png");
         if (!img.isNull()) {
@@ -288,19 +288,19 @@ void Realtime::makeShadowMapFBO() {
 
     glTexImage2D(GL_TEXTURE_2D,
                  0,
-                 GL_DEPTH_COMPONENT24,        // internal format
+                 GL_DEPTH_COMPONENT24,
                  m_shadowRes,
                  m_shadowRes,
                  0,
-                 GL_DEPTH_COMPONENT,          // format
-                 GL_FLOAT,                    // type
+                 GL_DEPTH_COMPONENT,
+                 GL_FLOAT,
                  nullptr);
 
-    // Tutorial-style sampler params
+    // sampler params
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    // Very important for shadow edges
+    // for shadow edges
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
     float borderCol[4] = {1.f, 1.f, 1.f, 1.f};
@@ -328,7 +328,7 @@ void Realtime::updateShadowLightSelection() {
     m_hasShadowLight = false;
     m_shadowLightIndex = -1;
 
-    // Simple: pick the first directional light
+    // pick the first directional light
     for (int i = 0; i < (int)m_render.lights.size(); ++i) {
         const auto &L = m_render.lights[i];
         if (L.type == LightType::LIGHT_DIRECTIONAL) {
@@ -338,7 +338,7 @@ void Realtime::updateShadowLightSelection() {
         }
     }
 
-    // Fallback: if no directional, you could pick any light or just leave it off
+    // Fallback: if no directional, pick any light or just leave it off
     if (!m_render.lights.empty()) {
         m_hasShadowLight = true;
         m_shadowLightIndex = 0;
@@ -360,14 +360,14 @@ void Realtime::updateLightViewProj() {
     }
 
     // Place light some distance "upstream" along this direction.
-    glm::vec3 target(0.f, 0.f, 0.f);      // focus around origin / terrain region
+    glm::vec3 target(0.f, 0.f, 0.f); // focus around origin / terrain region
     glm::vec3 lightPos = target - lightDir * 30.0f;
 
     glm::mat4 lightView = glm::lookAt(lightPos,
                                       target,
                                       glm::vec3(0.f, 1.f, 0.f));
 
-    // Orthographic frustum that covers your planet/terrain region
+    // Orthographic frustum that covers planet/terrain region
     float orthoSize = 25.0f;
     float nearPlane = 1.0f;
     float farPlane  = 80.0f;
@@ -393,7 +393,7 @@ void Realtime::renderShadowMap() {
     GLint prevProgram = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
 
-    // --- Shadow pass ---
+    // Shadow pass
     glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
     glViewport(0, 0, m_shadowRes, m_shadowRes);
 
@@ -919,10 +919,10 @@ void Realtime::renderPlanetScene() {
     GLint prevFBO;
     glm::mat4 V, P;
 
-    // --- Shadow setup (Planet only) ---
+    // Shadow setup (Planet only)
     updateShadowLightSelection();
     updateLightViewProj();
-    renderShadowMap();   // fills m_shadowDepthTex
+    renderShadowMap();  // fills m_shadowDepthTex
 
     // 1. Geometry Pass (shared)
     runGeometryPass(prevFBO, V, P);
@@ -1570,6 +1570,7 @@ void Realtime::rebuildGeometryFromRenderData() {
 void Realtime::buildPlanetScene() {
     m_draws.clear();
     m_render.lights.clear();
+
     // Reasonable default globals
     m_render.globalData.ka = 0.1f;
     m_render.globalData.kd = 1.0f;
@@ -1588,7 +1589,7 @@ void Realtime::buildPlanetScene() {
     L.penumbra = 0.f;
     m_render.lights.push_back(L);
 
-    // -------- terrain --------
+    // terrain
     TerrainGenerator tg;
     std::vector<float> pnc = tg.generateTerrain();
 
@@ -1640,7 +1641,7 @@ void Realtime::buildPlanetScene() {
 
     m_draws.push_back(terrain);
 
-    // -------- sphere planet --------
+    //sphere planet
     auto generator = ShapeFactory::create(PrimitiveType::PRIMITIVE_SPHERE);
     generator->updateParams(25, 25);
     auto sphereData = generator->generateShape();
@@ -1666,7 +1667,7 @@ void Realtime::buildPlanetScene() {
         p.normalMat = glm::mat3(glm::transpose(p.invModel));
         p.prevModel = p.model;
 
-        p.kd = glm::vec3(1.0f);  // won't matter much for planets
+        p.kd = glm::vec3(1.0f);
         p.ka = glm::vec3(0.0f);
         p.ks = glm::vec3(0.0f);
         p.shininess = 0.f;
@@ -1683,8 +1684,8 @@ void Realtime::buildPlanetScene() {
     DrawItem planet1 = makePlanet(
         glm::vec3(0.f, 0.6f, 1.f),
         0.8f,
-        glm::vec3(0.3f, 0.2f, 0.6f),  // dark
-        glm::vec3(0.9f, 0.4f, 0.8f)   // light
+        glm::vec3(0.3f, 0.2f, 0.6f), // dark
+        glm::vec3(0.9f, 0.4f, 0.8f) // light
         );
     m_draws.push_back(planet1);
 
@@ -1746,8 +1747,8 @@ void Realtime::buildPlanetScene() {
         );
     moon2.isMoon      = true;
     moon2.moonCenter  = bigPlanetCenter;
-    moon2.orbitSpeed  = -1.5f;  // negative = opposite direction
-    moon2.orbitPhase  = 1.7f;   // start elsewhere
+    moon2.orbitSpeed  = -1.5f;// negative = opposite direction
+    moon2.orbitPhase  = 1.7f; // start elsewhere
     m_draws.push_back(moon2);
 
     // Ring of distant small planets around the horizon
@@ -1852,7 +1853,7 @@ void Realtime::buildPlanetScene() {
 
         glm::vec3 scale(0.2f, 0.2f, 0.2f);
 
-        float speed = 0.3f + 0.1f * i;           // slightly different per cube
+        float speed = 0.3f + 0.1f * i; // slightly different per cube
         float amp   = 0.4f + 0.05f * (i % 4);
         float phase = 1.3f * i;
 

@@ -103,6 +103,7 @@ vec3 cotch(vec3 p) {
 }
 
 // Shadertoy-ish cval() adapted to use u_time & our noise()
+// Reference: https://www.shadertoy.com/view/tcVcDc
 float cval(vec3 p) {
     p /= length(p);
     float t = 0.0;
@@ -120,14 +121,13 @@ float cval(vec3 p) {
 
         vec2 h = (v - vec2(
             noise(p * q - 2.0 * tange(p) * EPSILON, 0),
-            noise(p * q -      cotch(p) * EPSILON, 0)
+            noise(p * q -  cotch(p) * EPSILON, 0)
         ) / q) / EPSILON;
 
         t += tanh(v * 7.5);
 
         h /= length(h) + 0.5;
-        mat2 twist = mat2(0.2 * v, 0.5 * v,
-                         -0.5 * v, 0.2 * v);
+        mat2 twist = mat2(0.2 * v, 0.5 * v, -0.5 * v, 0.2 * v);
         h *= twist;
 
         p += h.x * tange(p) + h.y * cotch(p);
@@ -223,7 +223,7 @@ void main() {
           // ignore texture; full procedural color
           planetKd = planetBaseColor(v_objPos);
           baseKd   = planetKd;  // kd = planet colors
-          // also tweak n to bumpy planet normal
+          // tweak n to bumpy planet normal
           n = planetNormal(v_objPos);
       } else {
           if (u_hasTexture == 1) {

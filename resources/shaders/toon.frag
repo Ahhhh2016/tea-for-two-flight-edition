@@ -73,31 +73,6 @@ void main() {
     // From here on, use shadedColor as the base
     baseColor = vec4(shadedColor, baseColor.a);
 
-
-    // vec3 N = readNormal(v_uv);
-    // float slope = clamp(1.0 - abs(N.z), 0.0, 1.0);  // 0 = flat, 1 = vertical
-
-    // // If you want NO hatching on flat tops:
-    // slope = pow(slope, 1.5); // tighten a bit
-
-    // // Stripe coordinate: diagonal-ish lines across the screen
-    // //  - 200.0 controls spacing (lower = farther apart)
-    // //  - mix v_uv.x and v_uv.y so the lines tilt a bit
-    // float stripeCoord = v_uv.y * 180.0 + v_uv.x * 40.0;
-
-    // // Make thin bands where sin() crosses zero
-    // float s = abs(sin(stripeCoord));        // 0 at line center, 1 between lines
-    // float stripe = smoothstep(0.0, 0.12, 0.12 - s); // narrow line region
-
-    // // Modulate by slope so only steep stuff gets lines
-    // float lineMask = stripe * slope;
-
-    // // Make it *subtle*
-    // float lineStrength = 0.35;
-    // vec3 inkColor = vec3(0.08, 0.03, 0.00);
-
-    // baseColor.rgb = mix(baseColor.rgb, inkColor, lineMask * lineStrength);
-
     // Shared texel info
     ivec2 texSizeI = textureSize(u_depthTex, 0);
     vec2 texSize   = vec2(texSizeI);

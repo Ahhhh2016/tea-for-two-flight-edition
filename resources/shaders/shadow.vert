@@ -18,7 +18,7 @@ uniform float u_floatPhase;
 void main() {
     vec4 wpos = u_M * vec4(a_pos, 1.0);
 
-    // ---- SAME MOON ANIMATION ----
+    // Moon animation
     if (u_isMoon) {
         float ang = u_time * u_orbitSpeed + u_orbitPhase;
 
@@ -37,7 +37,7 @@ void main() {
         wpos.xyz = rel + u_moonCenter;
     }
 
-    // ---- SAME FLOATING CUBE BOB ----
+    // floating cube
     if (u_isFloatingCube) {
         float t   = u_time * u_floatSpeed + u_floatPhase;
         float bob = sin(t) * u_floatAmp;
