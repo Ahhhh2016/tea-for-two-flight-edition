@@ -195,6 +195,7 @@ void Realtime::initializeGL() {
         if (m_postProgToon == 0) m_postProgToon = 0;
     }
     // Load sky texture for Planet/Toon mode
+    //https://stock.adobe.com/images/watercolor-cosmic-cosmos-starry-background-colorful-watercolor-galaxy-universe-or-night-sky-with-stars-hand-drawn-illustration-with-blobs-spots-texture-emerald-black-watercolour-stains/199993248?isa0=1&state=%7B%22ac%22%3A%22stock.adobe.com%22%7D
     {
         QImage img(":/resources/images/sky1.png");
         if (!img.isNull()) {
