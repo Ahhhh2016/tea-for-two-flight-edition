@@ -27,3 +27,10 @@ First-person view flying over different scenes, including a cartoon space, with 
 - Transparent objects can show sorting artifacts with fog and certain filters.
 - High resolutions and heavy blur filters can reduce FPS on integrated GPUs.
 - Platform/driver precision differences (especially on macOS OpenGL) may cause subtle visual variance.
+
+## References
+
+- Terrain generation: https://www.youtube.com/watch?v=BFld4EBO2RE 
+- Water scene: https://www.shadertoy.com/view/MdXyzX 
+- Stylized portal shader: https://www.shadertoy.com/view/fddSWj
+- Moebius-style post-processing shader: https://blog.maximeheckel.com/posts/moebius-style-post-processing/
